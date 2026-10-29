@@ -1,0 +1,8 @@
+com\vishesh\effectivemenu\snapshot\api\EffectiveMenuSnapshotControllerMvcTest.class
+com\vishesh\effectivemenu\snapshot\api\EffectiveMenuSnapshotApiIntegrationTest.class
+com\vishesh\effectivemenu\TestcontainersConfiguration.class
+com\vishesh\effectivemenu\snapshot\application\EffectiveMenuSnapshotServiceTest.class
+com\vishesh\effectivemenu\snapshot\domain\EffectiveMenuSnapshotTest.class
+com\vishesh\effectivemenu\snapshot\persistence\EffectiveMenuSnapshotEntityTest.class
+com\vishesh\effectivemenu\snapshot\persistence\EffectiveMenuSnapshotRepositoryIntegrationTest.class
+com\vishesh\effectivemenu\snapshot\persistence\EffectiveMenuSnapshotPersistenceAdapterTest.class
