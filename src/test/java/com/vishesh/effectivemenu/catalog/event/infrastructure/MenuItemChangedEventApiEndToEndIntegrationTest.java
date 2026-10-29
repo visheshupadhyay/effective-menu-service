@@ -158,7 +158,7 @@ public class MenuItemChangedEventApiEndToEndIntegrationTest {
     }
 
     @Test
-    void test() throws Exception {
+    void staleEvent_doesNotOverwriteNewerSnapshotOrCustomerApiResponse() throws Exception {
         snapshotRepository.save(new EffectiveMenuSnapshotEntity(
                 OUTLET_ID, 4L, menu(new BigDecimal("10.00"), false), TIME, TIME));
 
@@ -193,6 +193,51 @@ public class MenuItemChangedEventApiEndToEndIntegrationTest {
                 .andExpect(jsonPath("$.effectiveMenu.items[0].id").value(ITEM_ID))
                 .andExpect(jsonPath("$.effectiveMenu.items[0].price").value(12.0))
                 .andExpect(jsonPath("$.effectiveMenu.items[0].availability").value(true))
+                .andExpect(jsonPath("$.effectiveMenu.items[0].visibility").value(true));
+    }
+
+    @Test
+    void publishedItemNameChange_isPersistedAndReturnedByCustomerApi() throws Exception {
+        snapshotRepository.save(new EffectiveMenuSnapshotEntity(
+            OUTLET_ID,
+            4L,
+            menu(new BigDecimal("12.00"), true),
+            TIME,
+            TIME));
+
+        String eventId = UUID.randomUUID().toString();
+        String payload = """
+                {
+                  "eventId": "%s",
+                  "eventType": "MENU_ITEM_CHANGED",
+                  "itemId": %d,
+                  "restaurantChainId": 20,
+                  "outletId": %d,
+                  "aggregateVersion": 5,
+                  "itemName": "Veg Burger",
+                  "price": 12.00,
+                  "availability": true,
+                  "visibility": true,
+                  "status": "ACTIVE",
+                  "occurredAt": "%s",
+                  "correlationId": "api-e2e-test"
+                }
+                """.formatted(eventId, ITEM_ID, OUTLET_ID, TIME);
+
+        kafkaTemplate.send(SOURCE_TOPIC,
+            String.valueOf(ITEM_ID),
+            payload).join();
+
+        kafkaTemplate.flush();
+         waitForProcessedEvent(UUID.fromString(eventId));
+        mockMvc.perform(get("/api/v1/outlets/{outletId}/menu", OUTLET_ID))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.outletId").value(OUTLET_ID))
+                .andExpect(jsonPath("$.snapshotVersion").value(5))
+                .andExpect(jsonPath("$.effectiveMenu.items[0].id").value(ITEM_ID))
+                .andExpect(jsonPath("$.effectiveMenu.items[0].price").value(12.0))
+                .andExpect(jsonPath("$.effectiveMenu.items[0].availability").value(true))
+                .andExpect(jsonPath("$.effectiveMenu.items[0].name").value("Veg Burger"))
                 .andExpect(jsonPath("$.effectiveMenu.items[0].visibility").value(true));
     }
 
