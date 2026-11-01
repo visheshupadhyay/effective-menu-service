@@ -9,6 +9,7 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import com.vishesh.effectivemenu.catalog.event.MenuItemChangedEvent;
 import com.vishesh.effectivemenu.catalog.event.MenuItemStatus;
 import com.vishesh.effectivemenu.snapshot.application.EffectiveMenuSnapshotRepository;
+import com.vishesh.effectivemenu.snapshot.cache.EffectiveMenuCache;
 import com.vishesh.effectivemenu.snapshot.domain.EffectiveMenuSnapshot;
 import com.vishesh.effectivemenu.monitoring.EffectiveMenuOperationalMetrics;
 
@@ -19,20 +20,22 @@ import tools.jackson.databind.node.ObjectNode;
 
 /** Applies one validated Catalog event to exactly one outlet snapshot. */
 @Service("defaultMenuItemChangedEventHandler")
-/** Applies valid catalog events to the outlet snapshot with duplicate/stale protection. */
 public class DefaultMenuItemChangedEventHandler implements MenuItemChangedEventHandler {
     private final EffectiveMenuSnapshotRepository effectiveMenuSnapshotRepository;
     private final ProcessedEventRepository processedEventRepository;
     private final EffectiveMenuOperationalMetrics metrics;
+    private final EffectiveMenuCache cache;
 
     public DefaultMenuItemChangedEventHandler(
             @Qualifier("effectiveMenuSnapshotPersistenceAdapter") EffectiveMenuSnapshotRepository effectiveMenuSnapshotRepository,
             @Qualifier("processedEventPersistenceAdapter") ProcessedEventRepository processedEventRepository,
-            EffectiveMenuOperationalMetrics metrics) {
+            EffectiveMenuOperationalMetrics metrics,
+            EffectiveMenuCache cache) {
 
         this.effectiveMenuSnapshotRepository = effectiveMenuSnapshotRepository;
         this.processedEventRepository = processedEventRepository;
         this.metrics = metrics;
+        this.cache = cache;
     }
 
     @Override
@@ -116,6 +119,7 @@ public class DefaultMenuItemChangedEventHandler implements MenuItemChangedEventH
                 copiedMenu,
                 snapshot.getCalculatedAt(),
                 now));
+        cache.evict(event.getOutletId());
 
         markProcessed(event);
         metrics.recordProcessed(event.getOccurredAt());

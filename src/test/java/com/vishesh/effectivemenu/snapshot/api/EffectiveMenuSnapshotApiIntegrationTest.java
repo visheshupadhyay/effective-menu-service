@@ -13,6 +13,7 @@ import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.context.TestPropertySource;
 
 import com.vishesh.effectivemenu.TestcontainersConfiguration;
 import com.vishesh.effectivemenu.snapshot.persistence.EffectiveMenuSnapshotEntity;
@@ -23,6 +24,7 @@ import tools.jackson.databind.ObjectMapper;
 @SpringBootTest
 @AutoConfigureMockMvc
 @Import(TestcontainersConfiguration.class)
+@TestPropertySource(properties = "app.effective-menu-cache.enabled=false")
 class EffectiveMenuSnapshotApiIntegrationTest {
 
     @Autowired
