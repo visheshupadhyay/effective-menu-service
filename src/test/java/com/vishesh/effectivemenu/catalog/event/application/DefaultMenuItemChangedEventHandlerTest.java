@@ -25,6 +25,7 @@ import com.vishesh.effectivemenu.catalog.event.CatalogEventType;
 import com.vishesh.effectivemenu.catalog.event.MenuItemChangedEvent;
 import com.vishesh.effectivemenu.catalog.event.MenuItemStatus;
 import com.vishesh.effectivemenu.snapshot.application.EffectiveMenuSnapshotRepository;
+import com.vishesh.effectivemenu.snapshot.cache.EffectiveMenuCache;
 import com.vishesh.effectivemenu.snapshot.domain.EffectiveMenuSnapshot;
 import com.vishesh.effectivemenu.monitoring.EffectiveMenuOperationalMetrics;
 
@@ -41,11 +42,13 @@ class DefaultMenuItemChangedEventHandlerTest {
     ProcessedEventRepository processedEvents;
     @Mock
     EffectiveMenuOperationalMetrics metrics;
+    @Mock
+    EffectiveMenuCache cache;
     private DefaultMenuItemChangedEventHandler handler;
 
     @BeforeEach
     void setUp() {
-        handler = new DefaultMenuItemChangedEventHandler(snapshots, processedEvents, metrics);
+        handler = new DefaultMenuItemChangedEventHandler(snapshots, processedEvents, metrics, cache);
     }
 
     @Test
@@ -63,6 +66,7 @@ class DefaultMenuItemChangedEventHandlerTest {
         assertEquals(true, item.get("visibility").asBoolean());
         assertEquals(5L, saved.getSnapshotVersion());
         verify(metrics).recordProcessed(event.getOccurredAt());
+        verify(cache).evict(event.getOutletId());
     }
 
     @Test
@@ -77,6 +81,7 @@ class DefaultMenuItemChangedEventHandlerTest {
         assertEquals(10, item.get("price").asInt());
         assertEquals(false, item.get("availability").asBoolean());
         assertEquals(true, item.get("visibility").asBoolean());
+        verify(cache).evict(event.getOutletId());
     }
 
     @Test
@@ -91,6 +96,7 @@ class DefaultMenuItemChangedEventHandlerTest {
         assertEquals(10, item.get("price").asInt());
         assertEquals(true, item.get("availability").asBoolean());
         assertEquals(false, item.get("visibility").asBoolean());
+        verify(cache).evict(event.getOutletId());
     }
 
     @Test
@@ -104,6 +110,7 @@ class DefaultMenuItemChangedEventHandlerTest {
         ObjectNode item = (ObjectNode) captureSavedSnapshot().getEffectiveMenu().get("items").get(0);
         assertEquals("HIDDEN", item.get("status").asText());
         assertEquals(false, item.get("visibility").asBoolean());
+        verify(cache).evict(event.getOutletId());
     }
 
     @Test
@@ -116,6 +123,7 @@ class DefaultMenuItemChangedEventHandlerTest {
 
         EffectiveMenuSnapshot saved = captureSavedSnapshot();
         assertEquals(0, saved.getEffectiveMenu().get("items").size());
+        verify(cache).evict(event.getOutletId());
     }
 
     @Test
@@ -129,6 +137,7 @@ class DefaultMenuItemChangedEventHandlerTest {
         ObjectNode item = (ObjectNode) captureSavedSnapshot().getEffectiveMenu().get("items").get(0);
         assertEquals("DRAFT", item.get("status").asText());
         assertEquals(false, item.get("visibility").asBoolean());
+        verify(cache).evict(event.getOutletId());
     }
 
     @Test
@@ -140,6 +149,7 @@ class DefaultMenuItemChangedEventHandlerTest {
 
         verify(snapshots, never()).findByOutletId(any());
         verify(snapshots, never()).save(any());
+        verifyNoInteractions(cache);
         verify(metrics).recordDuplicate();
     }
 
@@ -152,7 +162,7 @@ class DefaultMenuItemChangedEventHandlerTest {
 
         assertThrows(IllegalArgumentException.class, () -> handler.handle(event));
 
-        verifyNoInteractions(snapshots, processedEvents);
+        verifyNoInteractions(snapshots, processedEvents, cache);
     }
 
     @Test
@@ -164,6 +174,7 @@ class DefaultMenuItemChangedEventHandlerTest {
         handler.handle(event);
 
         verify(snapshots, never()).save(any());
+        verifyNoInteractions(cache);
         verify(processedEvents).save(
                 eq(event.getEventId()),
                 eq(CatalogEventType.MENU_ITEM_CHANGED),
@@ -179,6 +190,7 @@ class DefaultMenuItemChangedEventHandlerTest {
 
         assertThrows(EffectiveMenuSnapshotNotFoundException.class, () -> handler.handle(event));
         verify(snapshots, never()).save(any());
+        verifyNoInteractions(cache);
     }
 
     @Test

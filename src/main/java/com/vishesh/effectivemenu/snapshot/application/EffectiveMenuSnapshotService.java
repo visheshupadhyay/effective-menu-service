@@ -1,7 +1,11 @@
 package com.vishesh.effectivemenu.snapshot.application;
 
+import java.util.Optional;
+
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 
+import com.vishesh.effectivemenu.snapshot.cache.EffectiveMenuCache;
 import com.vishesh.effectivemenu.snapshot.domain.EffectiveMenuSnapshot;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.node.ArrayNode;
@@ -9,22 +13,30 @@ import tools.jackson.databind.node.ObjectNode;
 
 /** Reads stored outlet menus and prepares the customer-safe response. */
 @Service
-/** Reads customer snapshots and hides items that are not customer-visible. */
 public class EffectiveMenuSnapshotService {
     private final EffectiveMenuSnapshotRepository repository;
-
+    private final EffectiveMenuCache cache;
     public EffectiveMenuSnapshotService(
-            @org.springframework.beans.factory.annotation.Qualifier("effectiveMenuSnapshotPersistenceAdapter") EffectiveMenuSnapshotRepository repository) {
+        @Qualifier ("effectiveMenuSnapshotPersistenceAdapter") EffectiveMenuSnapshotRepository repository,
+        EffectiveMenuCache cache) {
         this.repository = repository;
+        this.cache = cache;
     }
 
     public EffectiveMenuSnapshot getSnapshot(Long outletId) {
         if (outletId == null || outletId <= 0) {
             throw new IllegalArgumentException("Outlet ID must be positive");
         }
+        Optional<EffectiveMenuSnapshot> optional = cache.get(outletId);
 
-        return repository.findByOutletId(outletId)
+        if (optional.isPresent()) {
+            return optional.get();
+        }
+
+        EffectiveMenuSnapshot snapshot = repository.findByOutletId(outletId)
                 .orElseThrow(() -> new EffectiveMenuSnapshotUnavailableException(outletId));
+        cache.put(outletId, snapshot);
+        return snapshot;
     }
 
     /** Returns a customer-safe copy without hidden, unavailable, or archived items. */
