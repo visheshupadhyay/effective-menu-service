@@ -9,10 +9,12 @@ import tools.jackson.databind.node.ObjectNode;
 
 /** Reads stored outlet menus and prepares the customer-safe response. */
 @Service
+/** Reads customer snapshots and hides items that are not customer-visible. */
 public class EffectiveMenuSnapshotService {
     private final EffectiveMenuSnapshotRepository repository;
 
-    public EffectiveMenuSnapshotService(EffectiveMenuSnapshotRepository repository) {
+    public EffectiveMenuSnapshotService(
+            @org.springframework.beans.factory.annotation.Qualifier("effectiveMenuSnapshotPersistenceAdapter") EffectiveMenuSnapshotRepository repository) {
         this.repository = repository;
     }
 

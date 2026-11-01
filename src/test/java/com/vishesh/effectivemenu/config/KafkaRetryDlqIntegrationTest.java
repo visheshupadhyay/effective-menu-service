@@ -38,6 +38,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.kafka.KafkaContainer;
 import org.testcontainers.utility.DockerImageName;
 
+import com.vishesh.effectivemenu.monitoring.EffectiveMenuOperationalMetrics;
+
 @Testcontainers
 @ExtendWith(SpringExtension.class)
 @ContextConfiguration(classes = {
@@ -155,6 +157,11 @@ class KafkaRetryDlqIntegrationTest {
         @Bean
         KafkaTemplate<String, Object> kafkaTemplate(ProducerFactory<String, Object> producerFactory) {
             return new KafkaTemplate<>(producerFactory);
+        }
+
+        @Bean
+        EffectiveMenuOperationalMetrics effectiveMenuOperationalMetrics() {
+            return new EffectiveMenuOperationalMetrics();
         }
 
         @Bean

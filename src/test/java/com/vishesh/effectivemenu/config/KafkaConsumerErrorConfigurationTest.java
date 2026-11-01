@@ -17,6 +17,8 @@ import org.springframework.test.context.ContextConfiguration;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.junit.jupiter.SpringExtension;
 
+import com.vishesh.effectivemenu.monitoring.EffectiveMenuOperationalMetrics;
+
 @ExtendWith(SpringExtension.class)
 @ContextConfiguration(classes = {
         KafkaConsumerErrorConfiguration.class,
@@ -57,6 +59,11 @@ public class KafkaConsumerErrorConfigurationTest {
         @Bean
         KafkaTemplate<String, Object> kafkaTemplate() {
             return mock(KafkaTemplate.class);
+        }
+
+        @Bean
+        EffectiveMenuOperationalMetrics effectiveMenuOperationalMetrics() {
+            return new EffectiveMenuOperationalMetrics();
         }
     }
 }

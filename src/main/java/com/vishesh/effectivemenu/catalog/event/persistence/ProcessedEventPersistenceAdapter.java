@@ -7,7 +7,7 @@ import com.vishesh.effectivemenu.catalog.event.CatalogEventType;
 import com.vishesh.effectivemenu.catalog.event.application.ProcessedEventRepository;
 import org.springframework.stereotype.Repository;
 
-@Repository
+@Repository("processedEventPersistenceAdapter")
 /** Converts processed-event domain calls into database operations. */
 public class ProcessedEventPersistenceAdapter implements ProcessedEventRepository {
 
