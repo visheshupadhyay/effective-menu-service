@@ -35,4 +35,11 @@ public class EffectiveMenuSnapshotExceptionHandler {
         return ResponseEntity.status(status).body(apiError);
     }
 
+    @ExceptionHandler(EffectiveMenuItemNotFoundException.class)
+    public ResponseEntity<ApiError> handleItemNotFound(EffectiveMenuItemNotFoundException exception,
+            jakarta.servlet.http.HttpServletRequest request) {
+        ApiError apiError = new ApiError(404, exception.getMessage(), request.getRequestURI());
+        return ResponseEntity.status(404).body(apiError);
+    }
+
 }

@@ -26,6 +26,7 @@ import com.vishesh.effectivemenu.catalog.event.MenuItemChangedEvent;
 import com.vishesh.effectivemenu.catalog.event.MenuItemStatus;
 import com.vishesh.effectivemenu.snapshot.application.EffectiveMenuSnapshotRepository;
 import com.vishesh.effectivemenu.snapshot.domain.EffectiveMenuSnapshot;
+import com.vishesh.effectivemenu.monitoring.EffectiveMenuOperationalMetrics;
 
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.node.ObjectNode;
@@ -38,11 +39,13 @@ class DefaultMenuItemChangedEventHandlerTest {
     EffectiveMenuSnapshotRepository snapshots;
     @Mock
     ProcessedEventRepository processedEvents;
+    @Mock
+    EffectiveMenuOperationalMetrics metrics;
     private DefaultMenuItemChangedEventHandler handler;
 
     @BeforeEach
     void setUp() {
-        handler = new DefaultMenuItemChangedEventHandler(snapshots, processedEvents);
+        handler = new DefaultMenuItemChangedEventHandler(snapshots, processedEvents, metrics);
     }
 
     @Test
@@ -59,6 +62,7 @@ class DefaultMenuItemChangedEventHandlerTest {
         assertEquals(true, item.get("availability").asBoolean());
         assertEquals(true, item.get("visibility").asBoolean());
         assertEquals(5L, saved.getSnapshotVersion());
+        verify(metrics).recordProcessed(event.getOccurredAt());
     }
 
     @Test
@@ -136,6 +140,7 @@ class DefaultMenuItemChangedEventHandlerTest {
 
         verify(snapshots, never()).findByOutletId(any());
         verify(snapshots, never()).save(any());
+        verify(metrics).recordDuplicate();
     }
 
     @Test
@@ -163,6 +168,7 @@ class DefaultMenuItemChangedEventHandlerTest {
                 eq(event.getEventId()),
                 eq(CatalogEventType.MENU_ITEM_CHANGED),
                 any(Instant.class));
+        verify(metrics).recordStale();
     }
 
     @Test

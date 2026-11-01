@@ -4,11 +4,13 @@ import java.time.Instant;
 import java.util.Optional;
 
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Qualifier;
 
 import com.vishesh.effectivemenu.catalog.event.MenuItemChangedEvent;
 import com.vishesh.effectivemenu.catalog.event.MenuItemStatus;
 import com.vishesh.effectivemenu.snapshot.application.EffectiveMenuSnapshotRepository;
 import com.vishesh.effectivemenu.snapshot.domain.EffectiveMenuSnapshot;
+import com.vishesh.effectivemenu.monitoring.EffectiveMenuOperationalMetrics;
 
 import jakarta.transaction.Transactional;
 import tools.jackson.databind.JsonNode;
@@ -16,16 +18,21 @@ import tools.jackson.databind.node.ArrayNode;
 import tools.jackson.databind.node.ObjectNode;
 
 /** Applies one validated Catalog event to exactly one outlet snapshot. */
-@Service
+@Service("defaultMenuItemChangedEventHandler")
+/** Applies valid catalog events to the outlet snapshot with duplicate/stale protection. */
 public class DefaultMenuItemChangedEventHandler implements MenuItemChangedEventHandler {
     private final EffectiveMenuSnapshotRepository effectiveMenuSnapshotRepository;
     private final ProcessedEventRepository processedEventRepository;
+    private final EffectiveMenuOperationalMetrics metrics;
 
-    public DefaultMenuItemChangedEventHandler(EffectiveMenuSnapshotRepository effectiveMenuSnapshotRepository,
-            ProcessedEventRepository processedEventRepository) {
+    public DefaultMenuItemChangedEventHandler(
+            @Qualifier("effectiveMenuSnapshotPersistenceAdapter") EffectiveMenuSnapshotRepository effectiveMenuSnapshotRepository,
+            @Qualifier("processedEventPersistenceAdapter") ProcessedEventRepository processedEventRepository,
+            EffectiveMenuOperationalMetrics metrics) {
 
         this.effectiveMenuSnapshotRepository = effectiveMenuSnapshotRepository;
         this.processedEventRepository = processedEventRepository;
+        this.metrics = metrics;
     }
 
     @Override
@@ -40,6 +47,7 @@ public class DefaultMenuItemChangedEventHandler implements MenuItemChangedEventH
         }
 
         if (processedEventRepository.exists(event.getEventId())) {
+            metrics.recordDuplicate();
             return;
         }
 
@@ -52,6 +60,7 @@ public class DefaultMenuItemChangedEventHandler implements MenuItemChangedEventH
         EffectiveMenuSnapshot snapshot = optional.get();
 
         if (event.getAggregateVersion() <= snapshot.getSnapshotVersion()) {
+            metrics.recordStale();
             markProcessed(event);
             return;
         }
@@ -109,6 +118,7 @@ public class DefaultMenuItemChangedEventHandler implements MenuItemChangedEventH
                 now));
 
         markProcessed(event);
+        metrics.recordProcessed(event.getOccurredAt());
     }
 
     private ObjectNode findItem(ArrayNode items, Long itemId) {

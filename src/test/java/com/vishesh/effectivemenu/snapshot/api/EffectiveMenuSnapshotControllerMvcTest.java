@@ -20,7 +20,7 @@ import com.vishesh.effectivemenu.snapshot.domain.EffectiveMenuSnapshot;
 
 import tools.jackson.databind.ObjectMapper;
 
-@WebMvcTest(EffectiveMenuSnapshotController.class)
+@WebMvcTest({EffectiveMenuSnapshotController.class, InternalEffectiveMenuController.class})
 class EffectiveMenuSnapshotControllerMvcTest {
 
     @Autowired
@@ -70,5 +70,35 @@ class EffectiveMenuSnapshotControllerMvcTest {
                 .andExpect(jsonPath("$.status").value(400))
                 .andExpect(jsonPath("$.message").value("Outlet ID must be positive"))
                 .andExpect(jsonPath("$.path").value("/api/v1/outlets/0/menu"));
+    }
+
+    @Test
+    void getInternalItemState_returnsEffectiveFields() throws Exception {
+        var timestamp = Instant.parse("2026-01-01T00:00:00Z");
+        var menu = new ObjectMapper().readTree(
+                "{\"items\":[{\"id\":101,\"price\":12.50,\"availability\":true,\"visibility\":false}]} ");
+        when(service.getSnapshot(501L))
+                .thenReturn(new EffectiveMenuSnapshot(501L, 7L, menu, timestamp, timestamp));
+
+        mockMvc.perform(get("/internal/effective-menu/items/101/outlets/501"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.menuItemId").value(101))
+                .andExpect(jsonPath("$.outletId").value(501))
+                .andExpect(jsonPath("$.price").value(12.50))
+                .andExpect(jsonPath("$.availability").value(true))
+                .andExpect(jsonPath("$.visibility").value(false))
+                .andExpect(jsonPath("$.version").value(7));
+    }
+
+    @Test
+    void getInternalItemState_whenItemIsMissing_returns404() throws Exception {
+        var timestamp = Instant.parse("2026-01-01T00:00:00Z");
+        var menu = new ObjectMapper().readTree("{\"items\":[{\"id\":999}]} ");
+        when(service.getSnapshot(501L))
+                .thenReturn(new EffectiveMenuSnapshot(501L, 7L, menu, timestamp, timestamp));
+
+        mockMvc.perform(get("/internal/effective-menu/items/101/outlets/501"))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.status").value(404));
     }
 }

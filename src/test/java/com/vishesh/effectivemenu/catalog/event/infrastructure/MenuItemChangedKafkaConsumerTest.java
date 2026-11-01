@@ -20,6 +20,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import com.vishesh.effectivemenu.catalog.event.MenuItemChangedEvent;
 import com.vishesh.effectivemenu.catalog.event.application.MenuItemChangedEventHandler;
+import com.vishesh.effectivemenu.monitoring.EffectiveMenuOperationalMetrics;
 
 import tools.jackson.databind.ObjectMapper;
 
@@ -34,9 +35,12 @@ class MenuItemChangedKafkaConsumerTest {
 
     private MenuItemChangedKafkaConsumer consumer;
 
+    @Mock
+    private EffectiveMenuOperationalMetrics metrics;
+
     @BeforeEach
     void setUp() {
-        consumer = new MenuItemChangedKafkaConsumer(new ObjectMapper(), handler);
+        consumer = new MenuItemChangedKafkaConsumer(new ObjectMapper(), handler, metrics);
     }
 
     @Test
@@ -66,12 +70,14 @@ class MenuItemChangedKafkaConsumerTest {
     void blankPayload_isRejected() {
         assertThrows(IllegalArgumentException.class, () -> consumer.consume("  "));
         verify(handler, never()).handle(any());
+        verify(metrics).recordFailure();
     }
 
     @Test
     void malformedJson_isRejected() {
         assertThrows(RuntimeException.class, () -> consumer.consume("{not-json"));
         verify(handler, never()).handle(any());
+        verify(metrics).recordFailure();
     }
 
     @Test
@@ -80,6 +86,7 @@ class MenuItemChangedKafkaConsumerTest {
 
         assertThrows(IllegalArgumentException.class, () -> consumer.consume(payload));
         verify(handler, never()).handle(any());
+        verify(metrics).recordFailure();
     }
 
     @Test
@@ -88,6 +95,7 @@ class MenuItemChangedKafkaConsumerTest {
 
         assertThrows(IllegalArgumentException.class, () -> consumer.consume(payload));
         verify(handler, never()).handle(any());
+        verify(metrics).recordFailure();
     }
 
     @Test
@@ -96,6 +104,7 @@ class MenuItemChangedKafkaConsumerTest {
 
         assertThrows(RuntimeException.class, () -> consumer.consume(payload));
         verify(handler, never()).handle(any());
+        verify(metrics).recordFailure();
     }
 
     @Test
@@ -108,6 +117,7 @@ class MenuItemChangedKafkaConsumerTest {
 
         assertEquals(failure, thrown);
         verify(handler).handle(any());
+        verify(metrics).recordFailure();
     }
 
     private String validPayload() {

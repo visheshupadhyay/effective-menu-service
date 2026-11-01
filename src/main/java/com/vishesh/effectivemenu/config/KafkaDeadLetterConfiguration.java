@@ -7,9 +7,17 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.listener.DeadLetterPublishingRecoverer;
 
+import com.vishesh.effectivemenu.monitoring.EffectiveMenuOperationalMetrics;
+
 @Configuration
 /** Sends messages that cannot be processed to the dead-letter topic. */
+/** Sends events that exhaust retries to the DLQ and records the failure metric. */
 public class KafkaDeadLetterConfiguration {
+    private final EffectiveMenuOperationalMetrics metrics;
+
+    public KafkaDeadLetterConfiguration(EffectiveMenuOperationalMetrics metrics) {
+        this.metrics = metrics;
+    }
 
     /**
      * Creates the helper that sends a Kafka message to the dead-letter topic.
@@ -28,6 +36,9 @@ public class KafkaDeadLetterConfiguration {
 
         return new DeadLetterPublishingRecoverer(
                 kafkaTemplate,
-                (record, exception) -> new TopicPartition(deadLetterTopic, record.partition()));
+                (record, exception) -> {
+                    metrics.recordDlq();
+                    return new TopicPartition(deadLetterTopic, record.partition());
+                });
     }
 }
