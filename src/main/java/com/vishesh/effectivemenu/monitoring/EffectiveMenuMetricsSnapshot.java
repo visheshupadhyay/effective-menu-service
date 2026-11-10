@@ -9,6 +9,13 @@ public record EffectiveMenuMetricsSnapshot(
         long staleEventsIgnored,
         long consumerFailures,
         long dlqEvents,
+        long cacheHits,
+        long cacheMisses,
+        long cacheReadFailures,
+        long cacheWrites,
+        long cacheWriteFailures,
+        long cacheEvictions,
+        long cacheEvictionFailures,
         Instant lastProcessedAt,
         Instant lastFailureAt,
         long lastPropagationLagSeconds) {

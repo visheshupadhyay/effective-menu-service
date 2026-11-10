@@ -16,6 +16,7 @@ import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactor
 import org.springframework.data.redis.core.StringRedisTemplate;
 
 import com.vishesh.effectivemenu.snapshot.domain.EffectiveMenuSnapshot;
+import com.vishesh.effectivemenu.monitoring.EffectiveMenuOperationalMetrics;
 
 import tools.jackson.databind.ObjectMapper;
 
@@ -45,7 +46,8 @@ class EffectiveMenuCacheRedisIntegrationTest {
                 new EffectiveMenuCacheKey("effective-menu:outlet:"),
                 new ObjectMapper(),
                 true,
-                Duration.ofSeconds(60));
+                Duration.ofSeconds(60),
+                new EffectiveMenuOperationalMetrics());
     }
 
     @AfterEach
@@ -89,12 +91,92 @@ class EffectiveMenuCacheRedisIntegrationTest {
                 new EffectiveMenuCacheKey("effective-menu:outlet:"),
                 new ObjectMapper(),
                 true,
-                Duration.ofMillis(100));
+                Duration.ofMillis(100),
+                new EffectiveMenuOperationalMetrics());
 
         shortLivedCache.put(1L, snapshot(1L, 4L));
         Thread.sleep(300);
 
         assertTrue(shortLivedCache.get(1L).isEmpty());
+    }
+
+    @Test
+    void whenRedisServerStops_cacheReadReturnsEmptyForPostgresFallback() throws Exception {
+        try (GenericContainer<?> outageRedis = new GenericContainer<>("redis:7-alpine")
+                .withExposedPorts(6379)) {
+            outageRedis.start();
+
+            LettuceConnectionFactory outageConnectionFactory = new LettuceConnectionFactory(
+                    outageRedis.getHost(), outageRedis.getMappedPort(6379));
+            outageConnectionFactory.setTimeout(2_000L);
+            outageConnectionFactory.afterPropertiesSet();
+
+            try {
+                StringRedisTemplate outageTemplate = new StringRedisTemplate(outageConnectionFactory);
+                outageTemplate.afterPropertiesSet();
+                EffectiveMenuCache outageCache = new EffectiveMenuCache(
+                        outageTemplate,
+                        new EffectiveMenuCacheKey("effective-menu:outlet:"),
+                        new ObjectMapper(),
+                        true,
+                        Duration.ofSeconds(60),
+                        new EffectiveMenuOperationalMetrics());
+
+                outageCache.put(1L, snapshot(1L, 4L));
+                outageRedis.stop();
+
+                assertTrue(outageCache.get(1L).isEmpty());
+            } finally {
+                outageConnectionFactory.destroy();
+            }
+        }
+    }
+
+    @Test
+    void afterRedisRestart_cacheCanBeWrittenAndReadAgain() throws Exception {
+        try (GenericContainer<?> restartedRedis = new GenericContainer<>("redis:7-alpine")
+                .withExposedPorts(6379)) {
+            restartedRedis.start();
+
+            LettuceConnectionFactory firstConnectionFactory = new LettuceConnectionFactory(
+                    restartedRedis.getHost(), restartedRedis.getMappedPort(6379));
+            firstConnectionFactory.afterPropertiesSet();
+
+            try {
+                EffectiveMenuCache firstCache = cacheFor(firstConnectionFactory);
+                firstCache.put(1L, snapshot(1L, 11L));
+                restartedRedis.stop();
+                assertTrue(firstCache.get(1L).isEmpty());
+            } finally {
+                firstConnectionFactory.destroy();
+            }
+
+            // Restarting a Testcontainers container may assign a different host port,
+            // so create a fresh client connection after restart.
+            restartedRedis.start();
+            LettuceConnectionFactory recoveredConnectionFactory = new LettuceConnectionFactory(
+                    restartedRedis.getHost(), restartedRedis.getMappedPort(6379));
+            recoveredConnectionFactory.afterPropertiesSet();
+            try {
+                EffectiveMenuCache recoveredCache = cacheFor(recoveredConnectionFactory);
+                recoveredCache.put(1L, snapshot(1L, 12L));
+                assertEquals(12L, recoveredCache.get(1L).orElseThrow().getSnapshotVersion());
+            } finally {
+                recoveredConnectionFactory.destroy();
+            }
+        }
+    }
+
+    private EffectiveMenuCache cacheFor(LettuceConnectionFactory factory) {
+        StringRedisTemplate template = new StringRedisTemplate(factory);
+        template.afterPropertiesSet();
+        return new EffectiveMenuCache(
+                template,
+                new EffectiveMenuCacheKey("effective-menu:outlet:"),
+                new ObjectMapper(),
+                true,
+                Duration.ofSeconds(60),
+                new EffectiveMenuOperationalMetrics());
     }
 
     private EffectiveMenuSnapshot snapshot(Long outletId, Long version) throws Exception {

@@ -22,6 +22,13 @@ class EffectiveMenuOperationalMetricsTest {
         assertEquals(0, snapshot.staleEventsIgnored());
         assertEquals(0, snapshot.consumerFailures());
         assertEquals(0, snapshot.dlqEvents());
+        assertEquals(0, snapshot.cacheHits());
+        assertEquals(0, snapshot.cacheMisses());
+        assertEquals(0, snapshot.cacheReadFailures());
+        assertEquals(0, snapshot.cacheWrites());
+        assertEquals(0, snapshot.cacheWriteFailures());
+        assertEquals(0, snapshot.cacheEvictions());
+        assertEquals(0, snapshot.cacheEvictionFailures());
         assertEquals(0, snapshot.lastPropagationLagSeconds());
     }
 
@@ -34,6 +41,13 @@ class EffectiveMenuOperationalMetricsTest {
         metrics.recordStale();
         metrics.recordFailure();
         metrics.recordDlq();
+        metrics.recordCacheHit();
+        metrics.recordCacheMiss();
+        metrics.recordCacheReadFailure();
+        metrics.recordCacheWrite();
+        metrics.recordCacheWriteFailure();
+        metrics.recordCacheEviction();
+        metrics.recordCacheEvictionFailure();
 
         EffectiveMenuMetricsSnapshot snapshot = metrics.snapshot();
         assertEquals(1, snapshot.processedEvents());
@@ -41,6 +55,13 @@ class EffectiveMenuOperationalMetricsTest {
         assertEquals(1, snapshot.staleEventsIgnored());
         assertEquals(1, snapshot.consumerFailures());
         assertEquals(1, snapshot.dlqEvents());
+        assertEquals(1, snapshot.cacheHits());
+        assertEquals(1, snapshot.cacheMisses());
+        assertEquals(1, snapshot.cacheReadFailures());
+        assertEquals(1, snapshot.cacheWrites());
+        assertEquals(1, snapshot.cacheWriteFailures());
+        assertEquals(1, snapshot.cacheEvictions());
+        assertEquals(1, snapshot.cacheEvictionFailures());
         assertEquals(NOW, snapshot.lastProcessedAt());
         assertEquals(NOW, snapshot.lastFailureAt());
         assertEquals(10, snapshot.lastPropagationLagSeconds());
