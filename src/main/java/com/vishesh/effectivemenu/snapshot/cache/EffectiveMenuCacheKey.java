@@ -22,4 +22,14 @@ public class EffectiveMenuCacheKey {
         }
         return keyPrefix + outletId;
     }
+
+    public String createLockKey(Long outletId) {
+        if (outletId == null || outletId <= 0) {
+            throw new IllegalArgumentException("Outlet ID must be positive");
+        }
+        String lockPrefix = keyPrefix.contains("outlet:")
+                ? keyPrefix.replaceFirst("outlet:", "lock:outlet:")
+                : keyPrefix + "lock:outlet:";
+        return lockPrefix + outletId;
+    }
 }

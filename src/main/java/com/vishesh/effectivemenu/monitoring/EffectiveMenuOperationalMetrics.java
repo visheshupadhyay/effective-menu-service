@@ -17,6 +17,13 @@ public class EffectiveMenuOperationalMetrics {
     private final AtomicLong staleEventsIgnored = new AtomicLong();
     private final AtomicLong consumerFailures = new AtomicLong();
     private final AtomicLong dlqEvents = new AtomicLong();
+    private final AtomicLong cacheHits = new AtomicLong();
+    private final AtomicLong cacheMisses = new AtomicLong();
+    private final AtomicLong cacheReadFailures = new AtomicLong();
+    private final AtomicLong cacheWrites = new AtomicLong();
+    private final AtomicLong cacheWriteFailures = new AtomicLong();
+    private final AtomicLong cacheEvictions = new AtomicLong();
+    private final AtomicLong cacheEvictionFailures = new AtomicLong();
     private final AtomicReference<Instant> lastProcessedAt = new AtomicReference<>();
     private final AtomicReference<Instant> lastFailureAt = new AtomicReference<>();
     private final AtomicLong lastPropagationLagSeconds = new AtomicLong();
@@ -63,6 +70,34 @@ public class EffectiveMenuOperationalMetrics {
         dlqEvents.incrementAndGet();
     }
 
+    public void recordCacheHit() {
+        cacheHits.incrementAndGet();
+    }
+
+    public void recordCacheMiss() {
+        cacheMisses.incrementAndGet();
+    }
+
+    public void recordCacheReadFailure() {
+        cacheReadFailures.incrementAndGet();
+    }
+
+    public void recordCacheWrite() {
+        cacheWrites.incrementAndGet();
+    }
+
+    public void recordCacheWriteFailure() {
+        cacheWriteFailures.incrementAndGet();
+    }
+
+    public void recordCacheEviction() {
+        cacheEvictions.incrementAndGet();
+    }
+
+    public void recordCacheEvictionFailure() {
+        cacheEvictionFailures.incrementAndGet();
+    }
+
     public EffectiveMenuMetricsSnapshot snapshot() {
         return new EffectiveMenuMetricsSnapshot(
                 processedEvents.get(),
@@ -70,6 +105,13 @@ public class EffectiveMenuOperationalMetrics {
                 staleEventsIgnored.get(),
                 consumerFailures.get(),
                 dlqEvents.get(),
+                cacheHits.get(),
+                cacheMisses.get(),
+                cacheReadFailures.get(),
+                cacheWrites.get(),
+                cacheWriteFailures.get(),
+                cacheEvictions.get(),
+                cacheEvictionFailures.get(),
                 lastProcessedAt.get(),
                 lastFailureAt.get(),
                 lastPropagationLagSeconds.get());
