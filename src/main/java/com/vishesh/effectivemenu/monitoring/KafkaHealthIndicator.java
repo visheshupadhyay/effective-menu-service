@@ -27,7 +27,7 @@ public class KafkaHealthIndicator implements HealthIndicator {
                 AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers))) {
             int brokerCount = adminClient.describeCluster()
                     .nodes()
-                    .get(2, TimeUnit.SECONDS)
+                    .get(10, TimeUnit.SECONDS)
                     .size();
             return Health.up().withDetail("brokerCount", brokerCount).build();
         } catch (Exception exception) {

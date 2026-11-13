@@ -54,7 +54,10 @@ public class MenuItemChangedKafkaConsumer {
                     dto.getVisibility(),
                     dto.getOccurredAt(),
                     dto.getCorrelationId(),
-                    dto.getStatus());
+                    dto.getStatus(),
+                    dto.getScheduleChanged(),
+                    dto.getScheduleVersion(), dto.getScheduleTimezone(), dto.getScheduleWindows(),
+                    dto.getBaseScheduleWindows(), dto.getOutletScheduleWindows());
 
             handler.handle(event);
         } catch (Exception e) {

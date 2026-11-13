@@ -4,5 +4,7 @@ package com.vishesh.effectivemenu.catalog.event;
 /** Event names understood by the consumer. */
 public enum CatalogEventType {
     /** A menu item changed in the Catalog Command Service. */
-    MENU_ITEM_CHANGED
+    MENU_ITEM_CHANGED,
+    /** A menu item's recurring availability schedule changed. */
+    SCHEDULE_CHANGED
 }

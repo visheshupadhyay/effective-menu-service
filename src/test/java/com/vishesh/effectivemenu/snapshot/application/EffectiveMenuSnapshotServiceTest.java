@@ -15,6 +15,8 @@ import static org.mockito.ArgumentMatchers.same;
 
 import java.time.Instant;
 import java.time.Duration;
+import java.time.Clock;
+import java.time.ZoneOffset;
 import java.util.Optional;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -33,6 +35,7 @@ import com.vishesh.effectivemenu.snapshot.domain.EffectiveMenuSnapshot;
 import com.vishesh.effectivemenu.snapshot.cache.EffectiveMenuCache;
 
 import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.JsonNode;
 
 @ExtendWith(MockitoExtension.class)
 class EffectiveMenuSnapshotServiceTest {
@@ -149,6 +152,31 @@ class EffectiveMenuSnapshotServiceTest {
 
         assertEquals(1, customerSnapshot.getEffectiveMenu().get("items").size());
         assertEquals(1L, customerSnapshot.getEffectiveMenu().get("items").get(0).get("id").asLong());
+        verify(repository, never()).findByOutletId(501L);
+    }
+
+    @Test
+    void getCustomerSnapshot_recalculatesScheduleAtReadTimeEvenFromCache() throws Exception {
+        service = new EffectiveMenuSnapshotService(repository, cache, false,
+                Duration.ofSeconds(5), Duration.ZERO, Duration.ZERO,
+                new com.vishesh.effectivemenu.snapshot.schedule.WeeklyScheduleEvaluator(),
+                Clock.fixed(Instant.parse("2026-01-05T12:00:00Z"), ZoneOffset.UTC));
+        var menu = new ObjectMapper().readTree("""
+                {"items":[{
+                  "id":1,"visibility":true,"availability":true,"status":"ACTIVE",
+                  "_schedule":{"timezone":"UTC","catalogAvailability":true,"windows":{
+                    "MONDAY":[{"startTime":"09:00","endTime":"11:00"}]
+                  }}
+                }]}""");
+        EffectiveMenuSnapshot cached = new EffectiveMenuSnapshot(501L, 9L, menu,
+                Instant.parse("2026-01-01T00:00:00Z"), Instant.parse("2026-01-01T00:00:00Z"));
+        when(cache.get(501L)).thenReturn(Optional.of(cached));
+
+        EffectiveMenuSnapshot customerSnapshot = service.getCustomerSnapshot(501L);
+
+        JsonNode item = customerSnapshot.getEffectiveMenu().get("items").get(0);
+        assertEquals(false, item.get("availability").asBoolean());
+        assertTrue(item.get("_schedule") == null);
         verify(repository, never()).findByOutletId(501L);
     }
 

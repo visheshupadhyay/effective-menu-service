@@ -135,4 +135,12 @@ The test prints approximate timings for a Redis hit, Redis miss, the complete
 PostgreSQL fallback path, and one Redis-unavailable fallback sample. It warms up
 the JVM before measuring and uses assertions only for correctness. Timing values
 are machine-specific and should be recorded as local comparison evidence, not
-as a production capacity guarantee.
+ as a production capacity guarantee.
+
+### Scheduled availability handling
+
+The consumer receives schedule windows and the outlet timezone with the versioned
+menu-item event. It uses an outlet weekday override first and otherwise inherits the
+base schedule, then evaluates the current local day/time. Outside every active
+window it stores `availability=false` while preserving visibility; archived items
+remain absent. After saving a newer snapshot it evicts only that outlet's Redis key.

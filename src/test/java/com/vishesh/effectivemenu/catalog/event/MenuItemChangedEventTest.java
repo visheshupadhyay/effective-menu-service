@@ -7,6 +7,9 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.time.LocalTime;
+import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 import org.junit.jupiter.api.Test;
@@ -89,6 +92,22 @@ class MenuItemChangedEventTest {
     void negativeSuppliedPrice_isRejected() {
         assertThrows(IllegalArgumentException.class,
                 () -> event(null, new BigDecimal("-1.00"), null, null));
+    }
+
+    @Test
+    void scheduleEvent_exposesBaseAndOutletWindows() {
+        EventScheduleWindow baseWindow = new EventScheduleWindow(LocalTime.of(9, 0), LocalTime.of(12, 0));
+        EventScheduleWindow outletWindow = new EventScheduleWindow(LocalTime.of(17, 0), LocalTime.of(20, 0));
+
+        MenuItemChangedEvent event = new MenuItemChangedEvent(EVENT_ID, null,
+                CatalogEventType.MENU_ITEM_CHANGED, 101L, 20L, 501L, 5L,
+                null, null, true, true, OCCURRED_AT, "corr-1", MenuItemStatus.ACTIVE,
+                true, 2L, "Europe/Berlin", Map.of(),
+                Map.of("MONDAY", List.of(baseWindow)),
+                Map.of("MONDAY", List.of(outletWindow)));
+
+        assertEquals(List.of(baseWindow), event.getBaseScheduleWindows().get("MONDAY"));
+        assertEquals(List.of(outletWindow), event.getOutletScheduleWindows().get("MONDAY"));
     }
 
     private MenuItemChangedEvent event(UUID eventId, CatalogEventType eventType, Long itemId,
