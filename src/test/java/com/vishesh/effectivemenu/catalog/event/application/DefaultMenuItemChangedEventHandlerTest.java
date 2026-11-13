@@ -11,6 +11,11 @@ import static org.mockito.Mockito.when;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.time.Clock;
+import java.time.ZoneOffset;
+import java.time.LocalTime;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -22,6 +27,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import com.vishesh.effectivemenu.catalog.event.CatalogEventType;
+import com.vishesh.effectivemenu.catalog.event.EventScheduleWindow;
 import com.vishesh.effectivemenu.catalog.event.MenuItemChangedEvent;
 import com.vishesh.effectivemenu.catalog.event.MenuItemStatus;
 import com.vishesh.effectivemenu.snapshot.application.EffectiveMenuSnapshotRepository;
@@ -35,6 +41,7 @@ import tools.jackson.databind.node.ObjectNode;
 @ExtendWith(MockitoExtension.class)
 class DefaultMenuItemChangedEventHandlerTest {
     private static final Instant TIME = Instant.parse("2026-01-01T00:00:00Z");
+    private static final Instant MONDAY_TEN_UTC = Instant.parse("2026-01-05T10:00:00Z");
 
     @Mock
     EffectiveMenuSnapshotRepository snapshots;
@@ -48,7 +55,8 @@ class DefaultMenuItemChangedEventHandlerTest {
 
     @BeforeEach
     void setUp() {
-        handler = new DefaultMenuItemChangedEventHandler(snapshots, processedEvents, metrics, cache);
+        handler = new DefaultMenuItemChangedEventHandler(snapshots, processedEvents, metrics, cache,
+                Clock.fixed(MONDAY_TEN_UTC, ZoneOffset.UTC));
     }
 
     @Test
@@ -77,7 +85,8 @@ class DefaultMenuItemChangedEventHandlerTest {
 
         handler.handle(event);
 
-        ObjectNode item = (ObjectNode) captureSavedSnapshot().getEffectiveMenu().get("items").get(0);
+        EffectiveMenuSnapshot saved = captureSavedSnapshot();
+        ObjectNode item = (ObjectNode) saved.getEffectiveMenu().get("items").get(0);
         assertEquals(10, item.get("price").asInt());
         assertEquals(false, item.get("availability").asBoolean());
         assertEquals(true, item.get("visibility").asBoolean());
@@ -92,7 +101,8 @@ class DefaultMenuItemChangedEventHandlerTest {
 
         handler.handle(event);
 
-        ObjectNode item = (ObjectNode) captureSavedSnapshot().getEffectiveMenu().get("items").get(0);
+        EffectiveMenuSnapshot saved = captureSavedSnapshot();
+        ObjectNode item = (ObjectNode) saved.getEffectiveMenu().get("items").get(0);
         assertEquals(10, item.get("price").asInt());
         assertEquals(true, item.get("availability").asBoolean());
         assertEquals(false, item.get("visibility").asBoolean());
@@ -227,6 +237,128 @@ class DefaultMenuItemChangedEventHandlerTest {
         verify(processedEvents, never()).save(any(), any(), any());
     }
 
+    @Test
+    void activeSchedule_keepsItemAvailableAndEvictsOutletCache() {
+        MenuItemChangedEvent event = scheduleEvent(5L, "UTC", Map.of(
+                "MONDAY", List.of(new EventScheduleWindow(LocalTime.of(9, 0), LocalTime.of(11, 0)))));
+        when(processedEvents.exists(event.getEventId())).thenReturn(false);
+        when(snapshots.findByOutletId(501L)).thenReturn(Optional.of(snapshot(4L)));
+
+        handler.handle(event);
+
+        EffectiveMenuSnapshot saved = captureSavedSnapshot();
+        ObjectNode item = (ObjectNode) saved.getEffectiveMenu().get("items").get(0);
+        assertEquals(true, item.get("availability").asBoolean());
+        assertEquals(true, item.get("visibility").asBoolean());
+        assertEquals(5L, saved.getSnapshotVersion());
+        verify(cache).evict(501L);
+    }
+
+    @Test
+    void inactiveSchedule_marksItemUnavailableButPreservesVisibility() {
+        MenuItemChangedEvent event = scheduleEvent(5L, "UTC", Map.of(
+                "MONDAY", List.of(new EventScheduleWindow(LocalTime.of(11, 0), LocalTime.of(12, 0)))));
+        when(processedEvents.exists(event.getEventId())).thenReturn(false);
+        when(snapshots.findByOutletId(501L)).thenReturn(Optional.of(snapshot(4L)));
+
+        handler.handle(event);
+
+        ObjectNode item = (ObjectNode) captureSavedSnapshot().getEffectiveMenu().get("items").get(0);
+        assertEquals(false, item.get("availability").asBoolean());
+        assertEquals(true, item.get("visibility").asBoolean());
+        verify(cache).evict(501L);
+    }
+
+    @Test
+    void emptySchedule_preservesExistingAvailabilityAndVisibility() {
+        MenuItemChangedEvent event = scheduleEvent(5L, "UTC", Map.of());
+        when(processedEvents.exists(event.getEventId())).thenReturn(false);
+        when(snapshots.findByOutletId(501L)).thenReturn(Optional.of(snapshot(4L)));
+
+        handler.handle(event);
+
+        ObjectNode item = (ObjectNode) captureSavedSnapshot().getEffectiveMenu().get("items").get(0);
+        assertEquals(true, item.get("availability").asBoolean());
+        assertEquals(true, item.get("visibility").asBoolean());
+        verify(cache).evict(501L);
+    }
+
+    @Test
+    void scheduleUsesOutletTimezoneWhenEvaluatingWindow() {
+        MenuItemChangedEvent event = scheduleEvent(5L, "America/New_York", Map.of(
+                "MONDAY", List.of(new EventScheduleWindow(LocalTime.of(5, 0), LocalTime.of(6, 0)))));
+        when(processedEvents.exists(event.getEventId())).thenReturn(false);
+        when(snapshots.findByOutletId(501L)).thenReturn(Optional.of(snapshot(4L)));
+
+        handler.handle(event);
+
+        ObjectNode item = (ObjectNode) captureSavedSnapshot().getEffectiveMenu().get("items").get(0);
+        assertEquals(true, item.get("availability").asBoolean());
+    }
+
+    @Test
+    void outletScheduleOverrideWinsForMondayWhileTuesdayInheritsBase() {
+        MenuItemChangedEvent event = new MenuItemChangedEvent(
+                UUID.randomUUID(), null, CatalogEventType.MENU_ITEM_CHANGED,
+                101L, 20L, 501L, 5L, null, null, true, true, TIME, "corr-1", MenuItemStatus.ACTIVE,
+                true, 5L, "UTC",
+                Map.of(),
+                Map.of("MONDAY", List.of(new EventScheduleWindow(LocalTime.of(9, 0), LocalTime.of(11, 0))),
+                        "TUESDAY", List.of(new EventScheduleWindow(LocalTime.of(9, 0), LocalTime.of(12, 0)))),
+                Map.of("MONDAY", List.of(new EventScheduleWindow(LocalTime.of(17, 0), LocalTime.of(20, 0)))));
+        when(processedEvents.exists(event.getEventId())).thenReturn(false);
+        when(snapshots.findByOutletId(501L)).thenReturn(Optional.of(snapshot(4L)));
+
+        handler.handle(event);
+
+        ObjectNode item = (ObjectNode) captureSavedSnapshot().getEffectiveMenu().get("items").get(0);
+        // Monday 10:00 is inside the base window, not the outlet override.
+        assertEquals(false, item.get("availability").asBoolean());
+        assertEquals(true, item.get("visibility").asBoolean());
+        verify(cache).evict(501L);
+    }
+
+    @Test
+    void archivedScheduleEvent_removesItemRegardlessOfSchedule() {
+        MenuItemChangedEvent event = scheduleEvent(5L, "UTC", Map.of(
+                "MONDAY", List.of(new EventScheduleWindow(LocalTime.of(9, 0), LocalTime.of(11, 0)))),
+                MenuItemStatus.ARCHIVED);
+        when(processedEvents.exists(event.getEventId())).thenReturn(false);
+        when(snapshots.findByOutletId(501L)).thenReturn(Optional.of(snapshot(4L)));
+
+        handler.handle(event);
+
+        assertEquals(0, captureSavedSnapshot().getEffectiveMenu().get("items").size());
+        verify(cache).evict(501L);
+    }
+
+    @Test
+    void staleScheduleEvent_isIgnoredWithoutCacheEviction() {
+        MenuItemChangedEvent event = scheduleEvent(4L, "UTC", Map.of(
+                "MONDAY", List.of(new EventScheduleWindow(LocalTime.of(9, 0), LocalTime.of(11, 0)))));
+        when(processedEvents.exists(event.getEventId())).thenReturn(false);
+        when(snapshots.findByOutletId(501L)).thenReturn(Optional.of(snapshot(4L)));
+
+        handler.handle(event);
+
+        verify(snapshots, never()).save(any());
+        verifyNoInteractions(cache);
+        verify(metrics).recordStale();
+    }
+
+    @Test
+    void duplicateScheduleEvent_isIgnoredBeforeReadingSnapshot() {
+        MenuItemChangedEvent event = scheduleEvent(5L, "UTC", Map.of());
+        when(processedEvents.exists(event.getEventId())).thenReturn(true);
+
+        handler.handle(event);
+
+        verify(snapshots, never()).findByOutletId(any());
+        verify(snapshots, never()).save(any());
+        verifyNoInteractions(cache);
+        verify(metrics).recordDuplicate();
+    }
+
 
     private EffectiveMenuSnapshot captureSavedSnapshot() {
         ArgumentCaptor<EffectiveMenuSnapshot> captor = ArgumentCaptor.forClass(EffectiveMenuSnapshot.class);
@@ -271,5 +403,18 @@ class DefaultMenuItemChangedEventHandlerTest {
         return new MenuItemChangedEvent(UUID.randomUUID(), null,
                 CatalogEventType.MENU_ITEM_CHANGED, itemId, 20L, outletId, version,
                 null, price, availability, visibility, TIME, "corr-1", status);
+    }
+
+    private MenuItemChangedEvent scheduleEvent(long version, String timezone,
+            Map<String, List<EventScheduleWindow>> windows) {
+        return scheduleEvent(version, timezone, windows, MenuItemStatus.ACTIVE);
+    }
+
+    private MenuItemChangedEvent scheduleEvent(long version, String timezone,
+            Map<String, List<EventScheduleWindow>> windows, MenuItemStatus status) {
+        return new MenuItemChangedEvent(UUID.randomUUID(), null,
+                CatalogEventType.MENU_ITEM_CHANGED, 101L, 20L, 501L, version,
+                null, null, true, true, TIME, "corr-1", status,
+                true, version, timezone, windows);
     }
 }

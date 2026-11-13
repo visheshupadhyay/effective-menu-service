@@ -1,17 +1,24 @@
 package com.vishesh.effectivemenu.catalog.event.application;
 
 import java.time.Instant;
+import java.time.Clock;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 
+import com.vishesh.effectivemenu.catalog.event.EventScheduleWindow;
 import com.vishesh.effectivemenu.catalog.event.MenuItemChangedEvent;
 import com.vishesh.effectivemenu.catalog.event.MenuItemStatus;
 import com.vishesh.effectivemenu.snapshot.application.EffectiveMenuSnapshotRepository;
 import com.vishesh.effectivemenu.snapshot.cache.EffectiveMenuCache;
 import com.vishesh.effectivemenu.snapshot.domain.EffectiveMenuSnapshot;
 import com.vishesh.effectivemenu.monitoring.EffectiveMenuOperationalMetrics;
+import com.vishesh.effectivemenu.snapshot.schedule.EffectiveScheduleResolver;
+import com.vishesh.effectivemenu.snapshot.schedule.WeeklyScheduleEvaluator;
 
 import jakarta.transaction.Transactional;
 import tools.jackson.databind.JsonNode;
@@ -25,17 +32,48 @@ public class DefaultMenuItemChangedEventHandler implements MenuItemChangedEventH
     private final ProcessedEventRepository processedEventRepository;
     private final EffectiveMenuOperationalMetrics metrics;
     private final EffectiveMenuCache cache;
+    private final Clock clock;
+    private final WeeklyScheduleEvaluator scheduleEvaluator;
+    private final EffectiveScheduleResolver scheduleResolver;
 
+    @Autowired
     public DefaultMenuItemChangedEventHandler(
             @Qualifier("effectiveMenuSnapshotPersistenceAdapter") EffectiveMenuSnapshotRepository effectiveMenuSnapshotRepository,
             @Qualifier("processedEventPersistenceAdapter") ProcessedEventRepository processedEventRepository,
             EffectiveMenuOperationalMetrics metrics,
-            EffectiveMenuCache cache) {
+            EffectiveMenuCache cache,
+            WeeklyScheduleEvaluator scheduleEvaluator,
+            EffectiveScheduleResolver scheduleResolver) {
+        this(effectiveMenuSnapshotRepository, processedEventRepository, metrics, cache, Clock.systemUTC(),
+                scheduleEvaluator, scheduleResolver);
+    }
+
+    DefaultMenuItemChangedEventHandler(
+            EffectiveMenuSnapshotRepository effectiveMenuSnapshotRepository,
+            ProcessedEventRepository processedEventRepository,
+            EffectiveMenuOperationalMetrics metrics,
+            EffectiveMenuCache cache,
+            Clock clock) {
+        this(effectiveMenuSnapshotRepository, processedEventRepository, metrics, cache, clock,
+                new WeeklyScheduleEvaluator(), new EffectiveScheduleResolver());
+    }
+
+    DefaultMenuItemChangedEventHandler(
+            EffectiveMenuSnapshotRepository effectiveMenuSnapshotRepository,
+            ProcessedEventRepository processedEventRepository,
+            EffectiveMenuOperationalMetrics metrics,
+            EffectiveMenuCache cache,
+            Clock clock,
+            WeeklyScheduleEvaluator scheduleEvaluator,
+            EffectiveScheduleResolver scheduleResolver) {
 
         this.effectiveMenuSnapshotRepository = effectiveMenuSnapshotRepository;
         this.processedEventRepository = processedEventRepository;
         this.metrics = metrics;
         this.cache = cache;
+        this.clock = clock;
+        this.scheduleEvaluator = scheduleEvaluator;
+        this.scheduleResolver = scheduleResolver;
     }
 
     @Override
@@ -89,7 +127,7 @@ public class DefaultMenuItemChangedEventHandler implements MenuItemChangedEventH
             removeItem(items, itemId);
         } else {
             if (event.getItemName() != null) {
-            item.put("name", event.getItemName());
+                item.put("name", event.getItemName());
 
             }
 
@@ -97,8 +135,26 @@ public class DefaultMenuItemChangedEventHandler implements MenuItemChangedEventH
                 item.put("price", event.getPrice());
             }
 
-            if (event.getAvailability() != null) {
+            if (Boolean.TRUE.equals(event.getScheduleChanged())) {
+                Map<String, List<EventScheduleWindow>> effectiveWindows = scheduleResolver.resolve(
+                        event.getBaseScheduleWindows(), event.getOutletScheduleWindows());
+                if (effectiveWindows.values().stream().allMatch(List::isEmpty)
+                        && !event.getScheduleWindows().isEmpty()) {
+                    effectiveWindows = event.getScheduleWindows();
+                }
+                storeSchedule(item, effectiveWindows, event.getScheduleTimezone(), event.getAvailability());
+                // An empty schedule means that no schedule restriction exists. Keep
+                // the current catalog availability instead of turning the item off.
+                if (hasAnyWindows(effectiveWindows)) {
+                    boolean scheduleActive = scheduleEvaluator.isActive(
+                            effectiveWindows, event.getScheduleTimezone(), clock.instant());
+                    boolean catalogAvailable = event.getAvailability() == null
+                            || Boolean.TRUE.equals(event.getAvailability());
+                    item.put("availability", scheduleActive && catalogAvailable);
+                }
+            } else if (event.getAvailability() != null) {
                 item.put("availability", event.getAvailability());
+                updateStoredCatalogAvailability(item, event.getAvailability());
             }
 
             if (event.getVisibility() != null) {
@@ -112,7 +168,7 @@ public class DefaultMenuItemChangedEventHandler implements MenuItemChangedEventH
             }
         }
 
-        Instant now = Instant.now();
+        Instant now = clock.instant();
         effectiveMenuSnapshotRepository.save(new EffectiveMenuSnapshot(
                 snapshot.getOutletId(),
                 event.getAggregateVersion(),
@@ -144,8 +200,36 @@ public class DefaultMenuItemChangedEventHandler implements MenuItemChangedEventH
         }
     }
 
+    /** Stores enough schedule data in the read model to re-evaluate it as time passes. */
+    private void storeSchedule(ObjectNode item, Map<String, List<EventScheduleWindow>> windows,
+            String timezone, Boolean availability) {
+        ObjectNode schedule = item.putObject("_schedule");
+        schedule.put("timezone", timezone);
+        schedule.put("catalogAvailability", availability == null || Boolean.TRUE.equals(availability));
+        ObjectNode windowsNode = schedule.putObject("windows");
+        windows.forEach((weekday, dayWindows) -> {
+            ArrayNode dayNode = windowsNode.putArray(weekday);
+            dayWindows.forEach(window -> {
+                ObjectNode windowNode = dayNode.addObject();
+                windowNode.put("startTime", window.startTime().toString());
+                windowNode.put("endTime", window.endTime().toString());
+            });
+        });
+    }
+
+    private void updateStoredCatalogAvailability(ObjectNode item, Boolean availability) {
+        JsonNode scheduleNode = item.get("_schedule");
+        if (scheduleNode instanceof ObjectNode schedule) {
+            schedule.put("catalogAvailability", Boolean.TRUE.equals(availability));
+        }
+    }
+
     private void markProcessed(MenuItemChangedEvent event) {
-        processedEventRepository.save(event.getEventId(), event.getEventType(), Instant.now());
+        processedEventRepository.save(event.getEventId(), event.getEventType(), clock.instant());
+    }
+
+    private boolean hasAnyWindows(Map<String, List<EventScheduleWindow>> windows) {
+        return windows != null && windows.values().stream().anyMatch(day -> day != null && !day.isEmpty());
     }
 
 }

@@ -3,6 +3,9 @@ package com.vishesh.effectivemenu.catalog.event.infrastructure;
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalTime;
+import java.time.ZoneOffset;
+import java.time.ZonedDateTime;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
@@ -35,6 +38,7 @@ import com.vishesh.effectivemenu.TestcontainersConfiguration;
 import com.vishesh.effectivemenu.catalog.event.persistence.ProcessedEventJpaRepository;
 import com.vishesh.effectivemenu.snapshot.persistence.EffectiveMenuSnapshotEntity;
 import com.vishesh.effectivemenu.snapshot.persistence.EffectiveMenuSnapshotJpaRepository;
+import com.vishesh.effectivemenu.snapshot.cache.EffectiveMenuCache;
 
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.node.ObjectNode;
@@ -72,6 +76,9 @@ public class MenuItemChangedEventApiEndToEndIntegrationTest {
     private ProcessedEventJpaRepository processedEventRepository;
 
     @Autowired
+    private EffectiveMenuCache cache;
+
+    @Autowired
     @Qualifier("testKafkaTemplate")
     private KafkaTemplate<String, Object> kafkaTemplate;
 
@@ -79,6 +86,7 @@ public class MenuItemChangedEventApiEndToEndIntegrationTest {
     void cleanDatabase() {
         processedEventRepository.deleteAll();
         snapshotRepository.deleteAll();
+        cache.evict(OUTLET_ID);
     }
 
     @Test
@@ -239,6 +247,81 @@ public class MenuItemChangedEventApiEndToEndIntegrationTest {
                 .andExpect(jsonPath("$.effectiveMenu.items[0].availability").value(true))
                 .andExpect(jsonPath("$.effectiveMenu.items[0].name").value("Veg Burger"))
                 .andExpect(jsonPath("$.effectiveMenu.items[0].visibility").value(true));
+    }
+
+    @Test
+    void scheduleChange_updatesAvailabilityAndCustomerApiResponse() throws Exception {
+        snapshotRepository.save(new EffectiveMenuSnapshotEntity(
+                OUTLET_ID, 4L, menu(new BigDecimal("12.00"), true), TIME, TIME));
+
+        // Use almost the whole day so the test is not tied to a particular
+        // clock minute on the developer machine or CI runner.
+        ZonedDateTime now = ZonedDateTime.now(ZoneOffset.UTC);
+        String activeDay = now.getDayOfWeek().name();
+        LocalTime activeStart = LocalTime.MIDNIGHT;
+        LocalTime activeEnd = LocalTime.of(23, 59, 59);
+
+        String activeEventId = UUID.randomUUID().toString();
+        kafkaTemplate.send(SOURCE_TOPIC, String.valueOf(ITEM_ID), schedulePayload(
+                activeEventId,
+                5,
+                activeDay,
+                activeStart,
+                activeEnd)).join();
+        kafkaTemplate.flush();
+
+        waitForSnapshotVersion(5L);
+        mockMvc.perform(get("/api/v1/outlets/{outletId}/menu", OUTLET_ID))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.snapshotVersion").value(5))
+                .andExpect(jsonPath("$.effectiveMenu.items[0].availability").value(true));
+
+        // A window two hours in the future is inactive at the time this event
+        // is consumed, so availability must become false.
+        ZonedDateTime future = now.plusHours(2);
+        String inactiveEventId = UUID.randomUUID().toString();
+        kafkaTemplate.send(SOURCE_TOPIC, String.valueOf(ITEM_ID), schedulePayload(
+                inactiveEventId,
+                6,
+                future.getDayOfWeek().name(),
+                future.toLocalTime(),
+                future.plusMinutes(30).toLocalTime())).join();
+        kafkaTemplate.flush();
+
+        waitForSnapshotVersion(6L);
+        mockMvc.perform(get("/api/v1/outlets/{outletId}/menu", OUTLET_ID))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.snapshotVersion").value(6))
+                .andExpect(jsonPath("$.effectiveMenu.items[0].availability").value(false))
+                .andExpect(jsonPath("$.effectiveMenu.items[0].visibility").value(true));
+    }
+
+    private String schedulePayload(String eventId, long version, String weekday,
+            LocalTime startTime, LocalTime endTime) {
+        return """
+                {
+                  "eventId": "%s",
+                  "eventType": "MENU_ITEM_CHANGED",
+                  "itemId": %d,
+                  "restaurantChainId": 20,
+                  "outletId": %d,
+                  "aggregateVersion": %d,
+                  "itemName": "Burger",
+                  "price": 12.00,
+                  "availability": true,
+                  "visibility": true,
+                  "status": "ACTIVE",
+                  "scheduleChanged": true,
+                  "scheduleVersion": %d,
+                  "scheduleTimezone": "UTC",
+                  "scheduleWindows": {
+                    "%s": [{"startTime": "%s", "endTime": "%s"}]
+                  },
+                  "occurredAt": "%s",
+                  "correlationId": "schedule-e2e-test"
+                }
+                """.formatted(eventId, ITEM_ID, OUTLET_ID, version, version,
+                        weekday, startTime, endTime, Instant.now());
     }
 
     private void waitForSnapshotVersion(long expectedVersion) throws InterruptedException {
