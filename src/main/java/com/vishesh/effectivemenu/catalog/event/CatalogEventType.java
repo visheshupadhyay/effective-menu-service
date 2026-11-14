@@ -6,5 +6,7 @@ public enum CatalogEventType {
     /** A menu item changed in the Catalog Command Service. */
     MENU_ITEM_CHANGED,
     /** A menu item's recurring availability schedule changed. */
-    SCHEDULE_CHANGED
+    SCHEDULE_CHANGED,
+    /** A menu item's base or outlet seasonal date range changed. */
+    SEASONAL_AVAILABILITY_CHANGED
 }

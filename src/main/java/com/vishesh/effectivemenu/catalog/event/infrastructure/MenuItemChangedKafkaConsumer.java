@@ -57,7 +57,9 @@ public class MenuItemChangedKafkaConsumer {
                     dto.getStatus(),
                     dto.getScheduleChanged(),
                     dto.getScheduleVersion(), dto.getScheduleTimezone(), dto.getScheduleWindows(),
-                    dto.getBaseScheduleWindows(), dto.getOutletScheduleWindows());
+                    dto.getBaseScheduleWindows(), dto.getOutletScheduleWindows(),
+                    dto.getSeasonalAvailabilityChanged(), dto.getSeasonalAvailabilityVersion(),
+                    dto.getSeasonalStartDate(), dto.getSeasonalEndDate(), dto.getSeasonalTimezone());
 
             handler.handle(event);
         } catch (Exception e) {

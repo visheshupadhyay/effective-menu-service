@@ -144,3 +144,9 @@ menu-item event. It uses an outlet weekday override first and otherwise inherits
 base schedule, then evaluates the current local day/time. Outside every active
 window it stores `availability=false` while preserving visibility; archived items
 remain absent. After saving a newer snapshot it evicts only that outlet's Redis key.
+
+### Seasonal availability handling
+
+Seasonal metadata is stored internally with the snapshot after a Kafka event. Every
+customer read evaluates `[startDate, endDate)` in the outlet timezone, then removes
+that internal metadata from the response. Redis remains only a cache.
