@@ -19,6 +19,7 @@ import com.vishesh.effectivemenu.snapshot.domain.EffectiveMenuSnapshot;
 import com.vishesh.effectivemenu.monitoring.EffectiveMenuOperationalMetrics;
 import com.vishesh.effectivemenu.snapshot.schedule.EffectiveScheduleResolver;
 import com.vishesh.effectivemenu.snapshot.schedule.WeeklyScheduleEvaluator;
+import com.vishesh.effectivemenu.snapshot.schedule.SeasonalAvailabilityEvaluator;
 
 import jakarta.transaction.Transactional;
 import tools.jackson.databind.JsonNode;
@@ -35,6 +36,7 @@ public class DefaultMenuItemChangedEventHandler implements MenuItemChangedEventH
     private final Clock clock;
     private final WeeklyScheduleEvaluator scheduleEvaluator;
     private final EffectiveScheduleResolver scheduleResolver;
+    private final SeasonalAvailabilityEvaluator seasonalEvaluator;
 
     @Autowired
     public DefaultMenuItemChangedEventHandler(
@@ -74,6 +76,7 @@ public class DefaultMenuItemChangedEventHandler implements MenuItemChangedEventH
         this.clock = clock;
         this.scheduleEvaluator = scheduleEvaluator;
         this.scheduleResolver = scheduleResolver;
+        this.seasonalEvaluator = new SeasonalAvailabilityEvaluator();
     }
 
     @Override
@@ -152,7 +155,16 @@ public class DefaultMenuItemChangedEventHandler implements MenuItemChangedEventH
                             || Boolean.TRUE.equals(event.getAvailability());
                     item.put("availability", scheduleActive && catalogAvailable);
                 }
-            } else if (event.getAvailability() != null) {
+            }
+
+            if (Boolean.TRUE.equals(event.getSeasonalAvailabilityChanged())) {
+                storeSeasonalAvailability(item, event.getSeasonalStartDate(), event.getSeasonalEndDate(),
+                        event.getSeasonalTimezone());
+                boolean catalogAvailable = readCatalogAvailability(item, event.getAvailability());
+                boolean seasonActive = seasonalEvaluator.isActive(event.getSeasonalStartDate(),
+                        event.getSeasonalEndDate(), event.getSeasonalTimezone(), clock.instant());
+                item.put("availability", catalogAvailable && seasonActive);
+            } else if (!Boolean.TRUE.equals(event.getScheduleChanged()) && event.getAvailability() != null) {
                 item.put("availability", event.getAvailability());
                 updateStoredCatalogAvailability(item, event.getAvailability());
             }
@@ -200,7 +212,10 @@ public class DefaultMenuItemChangedEventHandler implements MenuItemChangedEventH
         }
     }
 
-    /** Stores enough schedule data in the read model to re-evaluate it as time passes. */
+    /**
+     * Stores enough schedule data in the read model to re-evaluate it as time
+     * passes.
+     */
     private void storeSchedule(ObjectNode item, Map<String, List<EventScheduleWindow>> windows,
             String timezone, Boolean availability) {
         ObjectNode schedule = item.putObject("_schedule");
@@ -222,6 +237,23 @@ public class DefaultMenuItemChangedEventHandler implements MenuItemChangedEventH
         if (scheduleNode instanceof ObjectNode schedule) {
             schedule.put("catalogAvailability", Boolean.TRUE.equals(availability));
         }
+    }
+
+    private void storeSeasonalAvailability(ObjectNode item, java.time.LocalDate startDate,
+            java.time.LocalDate endDate, String timezone) {
+        ObjectNode seasonal = item.putObject("_seasonalAvailability");
+        seasonal.put("timezone", timezone);
+        if (startDate != null)
+            seasonal.put("startDate", startDate.toString());
+        if (endDate != null)
+            seasonal.put("endDate", endDate.toString());
+    }
+
+    private boolean readCatalogAvailability(ObjectNode item, Boolean eventAvailability) {
+        if (eventAvailability != null)
+            return Boolean.TRUE.equals(eventAvailability);
+        JsonNode schedule = item.get("_schedule");
+        return schedule == null || schedule.path("catalogAvailability").asBoolean(true);
     }
 
     private void markProcessed(MenuItemChangedEvent event) {

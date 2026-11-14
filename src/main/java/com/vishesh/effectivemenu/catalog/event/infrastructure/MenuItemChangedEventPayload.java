@@ -2,6 +2,7 @@ package com.vishesh.effectivemenu.catalog.event.infrastructure;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.UUID;
 import java.util.List;
 import java.util.Map;
@@ -34,6 +35,11 @@ public class MenuItemChangedEventPayload {
     private Map<String, List<EventScheduleWindow>> scheduleWindows;
     private Map<String, List<EventScheduleWindow>> baseScheduleWindows;
     private Map<String, List<EventScheduleWindow>> outletScheduleWindows;
+    private Boolean seasonalAvailabilityChanged;
+    private Long seasonalAvailabilityVersion;
+    private LocalDate seasonalStartDate;
+    private LocalDate seasonalEndDate;
+    private String seasonalTimezone;
 
     public MenuItemChangedEventPayload() {
 
@@ -122,6 +128,11 @@ public class MenuItemChangedEventPayload {
     public void setOutletScheduleWindows(Map<String, List<EventScheduleWindow>> value) {
         this.outletScheduleWindows = value;
     }
+    public void setSeasonalAvailabilityChanged(Boolean value) { this.seasonalAvailabilityChanged = value; }
+    public void setSeasonalAvailabilityVersion(Long value) { this.seasonalAvailabilityVersion = value; }
+    public void setSeasonalStartDate(LocalDate value) { this.seasonalStartDate = value; }
+    public void setSeasonalEndDate(LocalDate value) { this.seasonalEndDate = value; }
+    public void setSeasonalTimezone(String value) { this.seasonalTimezone = value; }
 
     public UUID getEventId() {
         return eventId;
@@ -206,5 +217,10 @@ public class MenuItemChangedEventPayload {
     public Map<String, List<EventScheduleWindow>> getOutletScheduleWindows() {
         return outletScheduleWindows;
     }
+    public Boolean getSeasonalAvailabilityChanged() { return seasonalAvailabilityChanged; }
+    public Long getSeasonalAvailabilityVersion() { return seasonalAvailabilityVersion; }
+    public LocalDate getSeasonalStartDate() { return seasonalStartDate; }
+    public LocalDate getSeasonalEndDate() { return seasonalEndDate; }
+    public String getSeasonalTimezone() { return seasonalTimezone; }
 
 }

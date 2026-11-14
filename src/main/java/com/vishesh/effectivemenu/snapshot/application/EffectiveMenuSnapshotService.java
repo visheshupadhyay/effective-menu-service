@@ -19,6 +19,8 @@ import com.vishesh.effectivemenu.snapshot.cache.EffectiveMenuCache;
 import com.vishesh.effectivemenu.snapshot.domain.EffectiveMenuSnapshot;
 import com.vishesh.effectivemenu.catalog.event.EventScheduleWindow;
 import com.vishesh.effectivemenu.snapshot.schedule.WeeklyScheduleEvaluator;
+import com.vishesh.effectivemenu.snapshot.schedule.SeasonalAvailabilityEvaluator;
+import java.time.LocalDate;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.node.ArrayNode;
 import tools.jackson.databind.node.ObjectNode;
@@ -34,6 +36,7 @@ public class EffectiveMenuSnapshotService {
     private final Duration lockRetryInterval;
     private final WeeklyScheduleEvaluator scheduleEvaluator;
     private final Clock clock;
+    private final SeasonalAvailabilityEvaluator seasonalEvaluator;
 
     @Autowired
     public EffectiveMenuSnapshotService(
@@ -67,6 +70,7 @@ public class EffectiveMenuSnapshotService {
         this.lockRetryInterval = lockRetryInterval;
         this.scheduleEvaluator = scheduleEvaluator;
         this.clock = clock;
+        this.seasonalEvaluator = new SeasonalAvailabilityEvaluator();
     }
 
     /**
@@ -164,6 +168,7 @@ public class EffectiveMenuSnapshotService {
                 continue;
             }
             applyCurrentSchedule(item);
+            applyCurrentSeasonalAvailability(item);
             if (!isCustomerVisible(item)) {
                 items.remove(index);
             }
@@ -216,5 +221,22 @@ public class EffectiveMenuSnapshotService {
             windows.put(weekday, dayWindows);
         });
         return windows;
+    }
+
+    /** Applies the optional seasonal rule at response time and hides its internal metadata. */
+    private void applyCurrentSeasonalAvailability(ObjectNode item) {
+        JsonNode seasonalNode = item.remove("_seasonalAvailability");
+        if (!(seasonalNode instanceof ObjectNode seasonal)) return;
+        try {
+            String timezone = seasonal.path("timezone").asString(null);
+            String startValue = seasonal.path("startDate").asString(null);
+            String endValue = seasonal.path("endDate").asString(null);
+            LocalDate startDate = startValue == null ? null : LocalDate.parse(startValue);
+            LocalDate endDate = endValue == null ? null : LocalDate.parse(endValue);
+            boolean seasonActive = seasonalEvaluator.isActive(startDate, endDate, timezone, clock.instant());
+            item.put("availability", item.path("availability").asBoolean(true) && seasonActive);
+        } catch (RuntimeException ignored) {
+            // Preserve the durable availability if seasonal metadata is corrupted.
+        }
     }
 }

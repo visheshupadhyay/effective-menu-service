@@ -181,6 +181,28 @@ class EffectiveMenuSnapshotServiceTest {
     }
 
     @Test
+    void getCustomerSnapshot_recalculatesSeasonalAvailabilityAtReadTimeEvenFromCache() throws Exception {
+        service = new EffectiveMenuSnapshotService(repository, cache, false,
+                Duration.ofSeconds(5), Duration.ZERO, Duration.ZERO,
+                new com.vishesh.effectivemenu.snapshot.schedule.WeeklyScheduleEvaluator(),
+                Clock.fixed(Instant.parse("2026-11-05T00:00:00Z"), ZoneOffset.UTC));
+        var menu = new ObjectMapper().readTree("""
+                {"items":[{
+                  "id":1,"visibility":true,"availability":true,"status":"ACTIVE",
+                  "_seasonalAvailability":{"timezone":"UTC","startDate":"2026-10-15","endDate":"2026-11-05"}
+                }]}""");
+        EffectiveMenuSnapshot cached = new EffectiveMenuSnapshot(501L, 10L, menu,
+                Instant.parse("2026-01-01T00:00:00Z"), Instant.parse("2026-01-01T00:00:00Z"));
+        when(cache.get(501L)).thenReturn(Optional.of(cached));
+
+        EffectiveMenuSnapshot customerSnapshot = service.getCustomerSnapshot(501L);
+
+        JsonNode item = customerSnapshot.getEffectiveMenu().get("items").get(0);
+        assertEquals(false, item.get("availability").asBoolean());
+        assertTrue(item.get("_seasonalAvailability") == null);
+    }
+
+    @Test
     void getSnapshot_whenLockIsAcquired_rechecksCacheAndReleasesLock() {
         service = new EffectiveMenuSnapshotService(repository, cache, true,
                 Duration.ofSeconds(5), Duration.ZERO, Duration.ZERO);
