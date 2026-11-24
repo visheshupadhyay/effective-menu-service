@@ -11,9 +11,11 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 
 import com.vishesh.effectivemenu.catalog.event.EventScheduleWindow;
+import com.vishesh.effectivemenu.catalog.event.CatalogEventType;
 import com.vishesh.effectivemenu.catalog.event.MenuItemChangedEvent;
 import com.vishesh.effectivemenu.catalog.event.MenuItemStatus;
 import com.vishesh.effectivemenu.snapshot.application.EffectiveMenuSnapshotRepository;
+import com.vishesh.effectivemenu.snapshot.application.EffectiveMenuItemSnapshotMapper;
 import com.vishesh.effectivemenu.snapshot.cache.EffectiveMenuCache;
 import com.vishesh.effectivemenu.snapshot.domain.EffectiveMenuSnapshot;
 import com.vishesh.effectivemenu.monitoring.EffectiveMenuOperationalMetrics;
@@ -37,6 +39,7 @@ public class DefaultMenuItemChangedEventHandler implements MenuItemChangedEventH
     private final WeeklyScheduleEvaluator scheduleEvaluator;
     private final EffectiveScheduleResolver scheduleResolver;
     private final SeasonalAvailabilityEvaluator seasonalEvaluator;
+    private final EffectiveMenuItemSnapshotMapper itemSnapshotMapper;
 
     @Autowired
     public DefaultMenuItemChangedEventHandler(
@@ -77,6 +80,7 @@ public class DefaultMenuItemChangedEventHandler implements MenuItemChangedEventH
         this.scheduleEvaluator = scheduleEvaluator;
         this.scheduleResolver = scheduleResolver;
         this.seasonalEvaluator = new SeasonalAvailabilityEvaluator();
+        this.itemSnapshotMapper = new EffectiveMenuItemSnapshotMapper();
     }
 
     @Override
@@ -103,12 +107,6 @@ public class DefaultMenuItemChangedEventHandler implements MenuItemChangedEventH
 
         EffectiveMenuSnapshot snapshot = optional.get();
 
-        if (event.getAggregateVersion() <= snapshot.getSnapshotVersion()) {
-            metrics.recordStale();
-            markProcessed(event);
-            return;
-        }
-
         JsonNode copiedMenu = snapshot.getEffectiveMenu().deepCopy();
         if (!copiedMenu.isObject() || !copiedMenu.has("items") || !copiedMenu.get("items").isArray()) {
             throw new IllegalArgumentException("Effective menu must contain an items array");
@@ -120,10 +118,33 @@ public class DefaultMenuItemChangedEventHandler implements MenuItemChangedEventH
 
         Long itemId = event.getItemId();
 
+        boolean activationEvent = event.getEventType() == CatalogEventType.MENU_ITEM_ACTIVATED;
+        if (activationEvent) {
+            validateActivationEvent(event);
+        }
+
         ObjectNode item = findItem(items, itemId);
+        boolean addedByCompleteSnapshot = false;
 
         if (item == null) {
-            throw new IllegalArgumentException("Menu item is not present in the outlet snapshot");
+            // Only complete snapshots may introduce an item that this outlet has
+            // not seen yet. A sparse change cannot safely build a customer item.
+            boolean bundleConfigurationEvent = Boolean.TRUE.equals(event.getBundleConfigurationChanged());
+            if (!activationEvent && !bundleConfigurationEvent) {
+                throw new IllegalArgumentException("Menu item is not present in the outlet snapshot");
+            }
+            item = items.addObject();
+            item.put("id", itemId);
+            addedByCompleteSnapshot = true;
+        }
+
+        long lastAppliedVersion = addedByCompleteSnapshot
+                ? -1L
+                : item.path("_catalogVersion").asLong(snapshot.getSnapshotVersion());
+        if (event.getAggregateVersion() <= lastAppliedVersion) {
+            metrics.recordStale();
+            markProcessed(event);
+            return;
         }
 
         if (event.getStatus() == MenuItemStatus.ARCHIVED) {
@@ -138,6 +159,15 @@ public class DefaultMenuItemChangedEventHandler implements MenuItemChangedEventH
                 item.put("price", event.getPrice());
             }
 
+            if (Boolean.TRUE.equals(event.getModifierConfigurationChanged())) {
+                itemSnapshotMapper.replaceModifierGroups(item, event.getModifierGroups());
+            }
+
+            if (Boolean.TRUE.equals(event.getBundleConfigurationChanged())) {
+                itemSnapshotMapper.replaceBundleStructure(item, event.getBundleSnapshot(),
+                        event.getAvailability(), event.getVisibility());
+            }
+
             if (Boolean.TRUE.equals(event.getScheduleChanged())) {
                 Map<String, List<EventScheduleWindow>> effectiveWindows = scheduleResolver.resolve(
                         event.getBaseScheduleWindows(), event.getOutletScheduleWindows());
@@ -145,7 +175,7 @@ public class DefaultMenuItemChangedEventHandler implements MenuItemChangedEventH
                         && !event.getScheduleWindows().isEmpty()) {
                     effectiveWindows = event.getScheduleWindows();
                 }
-                storeSchedule(item, effectiveWindows, event.getScheduleTimezone(), event.getAvailability());
+                itemSnapshotMapper.storeSchedule(item, effectiveWindows, event.getScheduleTimezone(), event.getAvailability());
                 // An empty schedule means that no schedule restriction exists. Keep
                 // the current catalog availability instead of turning the item off.
                 if (hasAnyWindows(effectiveWindows)) {
@@ -158,19 +188,21 @@ public class DefaultMenuItemChangedEventHandler implements MenuItemChangedEventH
             }
 
             if (Boolean.TRUE.equals(event.getSeasonalAvailabilityChanged())) {
-                storeSeasonalAvailability(item, event.getSeasonalStartDate(), event.getSeasonalEndDate(),
+                itemSnapshotMapper.storeSeasonalAvailability(item, event.getSeasonalStartDate(), event.getSeasonalEndDate(),
                         event.getSeasonalTimezone());
-                boolean catalogAvailable = readCatalogAvailability(item, event.getAvailability());
+                boolean catalogAvailable = itemSnapshotMapper.readCatalogAvailability(item, event.getAvailability());
                 boolean seasonActive = seasonalEvaluator.isActive(event.getSeasonalStartDate(),
                         event.getSeasonalEndDate(), event.getSeasonalTimezone(), clock.instant());
                 item.put("availability", catalogAvailable && seasonActive);
             } else if (!Boolean.TRUE.equals(event.getScheduleChanged()) && event.getAvailability() != null) {
                 item.put("availability", event.getAvailability());
-                updateStoredCatalogAvailability(item, event.getAvailability());
+                itemSnapshotMapper.updateStoredCatalogAvailability(item, event.getAvailability());
+                itemSnapshotMapper.updateStoredBundleAvailability(item, event.getAvailability());
             }
 
             if (event.getVisibility() != null) {
                 item.put("visibility", event.getVisibility());
+                itemSnapshotMapper.updateStoredBundleVisibility(item, event.getVisibility());
             }
 
             item.put("status", event.getStatus().name());
@@ -178,12 +210,18 @@ public class DefaultMenuItemChangedEventHandler implements MenuItemChangedEventH
                     || event.getStatus() == MenuItemStatus.DRAFT) {
                 item.put("visibility", false);
             }
+
+            // Aggregate versions belong to individual Catalog items, while a
+            // snapshot holds many items. Keep the last version beside the
+            // item so a newly added Burger Meal can accept version 2 even if
+            // another item previously advanced the outlet snapshot to 10.
+            item.put("_catalogVersion", event.getAggregateVersion());
         }
 
         Instant now = clock.instant();
         effectiveMenuSnapshotRepository.save(new EffectiveMenuSnapshot(
                 snapshot.getOutletId(),
-                event.getAggregateVersion(),
+                Math.max(snapshot.getSnapshotVersion(), event.getAggregateVersion()),
                 copiedMenu,
                 snapshot.getCalculatedAt(),
                 now));
@@ -202,6 +240,28 @@ public class DefaultMenuItemChangedEventHandler implements MenuItemChangedEventH
         return null;
     }
 
+    /**
+     * Activation creates a new customer-facing item, so it must carry a
+     * complete item snapshot rather than the nullable fields of a sparse update.
+     */
+    private void validateActivationEvent(MenuItemChangedEvent event) {
+        if (event.getItemName() == null || event.getItemName().isBlank()) {
+            throw new IllegalArgumentException("Activated menu item must include a name");
+        }
+        if (event.getPrice() == null) {
+            throw new IllegalArgumentException("Activated menu item must include a price");
+        }
+        if (event.getAvailability() == null) {
+            throw new IllegalArgumentException("Activated menu item must include availability");
+        }
+        if (event.getVisibility() == null) {
+            throw new IllegalArgumentException("Activated menu item must include visibility");
+        }
+        if (event.getStatus() != MenuItemStatus.ACTIVE) {
+            throw new IllegalArgumentException("Activated menu item status must be ACTIVE");
+        }
+    }
+
     private void removeItem(ArrayNode items, Long itemId) {
         for (int index = items.size() - 1; index >= 0; index--) {
             JsonNode item = items.get(index);
@@ -210,50 +270,6 @@ public class DefaultMenuItemChangedEventHandler implements MenuItemChangedEventH
                 return;
             }
         }
-    }
-
-    /**
-     * Stores enough schedule data in the read model to re-evaluate it as time
-     * passes.
-     */
-    private void storeSchedule(ObjectNode item, Map<String, List<EventScheduleWindow>> windows,
-            String timezone, Boolean availability) {
-        ObjectNode schedule = item.putObject("_schedule");
-        schedule.put("timezone", timezone);
-        schedule.put("catalogAvailability", availability == null || Boolean.TRUE.equals(availability));
-        ObjectNode windowsNode = schedule.putObject("windows");
-        windows.forEach((weekday, dayWindows) -> {
-            ArrayNode dayNode = windowsNode.putArray(weekday);
-            dayWindows.forEach(window -> {
-                ObjectNode windowNode = dayNode.addObject();
-                windowNode.put("startTime", window.startTime().toString());
-                windowNode.put("endTime", window.endTime().toString());
-            });
-        });
-    }
-
-    private void updateStoredCatalogAvailability(ObjectNode item, Boolean availability) {
-        JsonNode scheduleNode = item.get("_schedule");
-        if (scheduleNode instanceof ObjectNode schedule) {
-            schedule.put("catalogAvailability", Boolean.TRUE.equals(availability));
-        }
-    }
-
-    private void storeSeasonalAvailability(ObjectNode item, java.time.LocalDate startDate,
-            java.time.LocalDate endDate, String timezone) {
-        ObjectNode seasonal = item.putObject("_seasonalAvailability");
-        seasonal.put("timezone", timezone);
-        if (startDate != null)
-            seasonal.put("startDate", startDate.toString());
-        if (endDate != null)
-            seasonal.put("endDate", endDate.toString());
-    }
-
-    private boolean readCatalogAvailability(ObjectNode item, Boolean eventAvailability) {
-        if (eventAvailability != null)
-            return Boolean.TRUE.equals(eventAvailability);
-        JsonNode schedule = item.get("_schedule");
-        return schedule == null || schedule.path("catalogAvailability").asBoolean(true);
     }
 
     private void markProcessed(MenuItemChangedEvent event) {

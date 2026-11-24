@@ -150,3 +150,24 @@ remain absent. After saving a newer snapshot it evicts only that outlet's Redis 
 Seasonal metadata is stored internally with the snapshot after a Kafka event. Every
 customer read evaluates `[startDate, endDate)` in the outlet timezone, then removes
 that internal metadata from the response. Redis remains only a cache.
+
+### Bundle handling
+
+Catalog publishes `BUNDLE_CONFIGURATION_CHANGED` with a complete replacement tree for
+the changed root bundle. Effective Menu replaces—not merges—the stored
+`bundleChildren` array, so a child removed in Catalog cannot survive in a customer
+response. A customer-facing child contains only `id`, `name`, `quantity`, and nested
+`bundleChildren` when applicable; child prices are never added to the bundle's fixed
+price.
+
+Every required child affects its parent: an unavailable child makes the bundle visible
+but unavailable, while a draft, hidden, or archived child removes the bundle from the
+customer response. At read time, the service also uses a child's current top-level
+schedule and seasonal state, so a time boundary remains correct without waiting for a
+new Kafka event. Internal eligibility metadata is removed before the response is sent.
+
+Each top-level item also carries an internal last-applied Catalog version. This prevents
+an unrelated, older item version from making a newly created bundle look stale: for
+example, `Fries` may be at version 10 while a new `Burger Meal` legitimately starts at
+version 1. A complete bundle event can therefore materialize the new root safely; the
+internal version is removed before the customer response is sent.
