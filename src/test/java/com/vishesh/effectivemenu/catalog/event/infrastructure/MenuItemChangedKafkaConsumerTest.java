@@ -19,7 +19,10 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import com.vishesh.effectivemenu.catalog.event.MenuItemChangedEvent;
+import com.vishesh.effectivemenu.catalog.event.CatalogEventType;
+import com.vishesh.effectivemenu.catalog.event.OutletMenuInitializedEvent;
 import com.vishesh.effectivemenu.catalog.event.application.MenuItemChangedEventHandler;
+import com.vishesh.effectivemenu.catalog.event.application.OutletMenuInitializedEventHandler;
 import com.vishesh.effectivemenu.monitoring.EffectiveMenuOperationalMetrics;
 
 import tools.jackson.databind.ObjectMapper;
@@ -33,6 +36,9 @@ class MenuItemChangedKafkaConsumerTest {
     @Mock
     private MenuItemChangedEventHandler handler;
 
+    @Mock
+    private OutletMenuInitializedEventHandler outletInitializedHandler;
+
     private MenuItemChangedKafkaConsumer consumer;
 
     @Mock
@@ -40,7 +46,7 @@ class MenuItemChangedKafkaConsumerTest {
 
     @BeforeEach
     void setUp() {
-        consumer = new MenuItemChangedKafkaConsumer(new ObjectMapper(), handler, metrics);
+        consumer = new MenuItemChangedKafkaConsumer(new ObjectMapper(), handler, outletInitializedHandler, metrics);
     }
 
     @Test
@@ -64,6 +70,219 @@ class MenuItemChangedKafkaConsumerTest {
         assertEquals(com.vishesh.effectivemenu.catalog.event.MenuItemStatus.ACTIVE, event.getStatus());
         assertEquals(Instant.parse("2026-01-01T00:00:00Z"), event.getOccurredAt());
         assertEquals("corr-1", event.getCorrelationId());
+    }
+
+    @Test
+    void activationPayload_isMappedAndDelegatedWithCompleteItemFields() {
+        consumer.consume("""
+                {
+                  "eventId":"%s",
+                  "eventType":"MENU_ITEM_ACTIVATED",
+                  "itemId":101,
+                  "restaurantChainId":20,
+                  "outletId":501,
+                  "aggregateVersion":4,
+                  "itemName":"Burger",
+                  "price":149.00,
+                  "availability":true,
+                  "visibility":true,
+                  "status":"ACTIVE",
+                  "occurredAt":"2026-01-01T00:00:00Z",
+                  "correlationId":"activation-test"
+                }
+                """.formatted(EVENT_ID));
+
+        ArgumentCaptor<MenuItemChangedEvent> captor = ArgumentCaptor.forClass(MenuItemChangedEvent.class);
+        verify(handler).handle(captor.capture());
+
+        MenuItemChangedEvent event = captor.getValue();
+        assertEquals(CatalogEventType.MENU_ITEM_ACTIVATED, event.getEventType());
+        assertEquals("Burger", event.getItemName());
+        assertEquals(new BigDecimal("149.00"), event.getPrice());
+        assertEquals(Boolean.TRUE, event.getAvailability());
+        assertEquals(Boolean.TRUE, event.getVisibility());
+        assertEquals(com.vishesh.effectivemenu.catalog.event.MenuItemStatus.ACTIVE, event.getStatus());
+    }
+
+    @Test
+    void outletInitializationPayload_isMappedAndDelegatedToTheInitializationHandler() {
+        consumer.consume("""
+                {
+                  "eventId":"%s",
+                  "eventType":"OUTLET_MENU_INITIALIZED",
+                  "outletId":501,
+                  "restaurantChainId":20,
+                  "menuGroupId":30,
+                  "outletVersion":3,
+                  "outletTimezone":"UTC",
+                  "occurredAt":"2026-01-05T10:00:00Z",
+                  "correlationId":"onboarding-1",
+                  "menuItems":[{
+                    "menuItemId":101,
+                    "menuItemVersion":8,
+                    "itemName":"Burger",
+                    "price":149.00,
+                    "status":"ACTIVE",
+                    "availability":true,
+                    "visibility":true,
+                    "baseScheduleWindows":{},
+                    "outletScheduleWindows":{},
+                    "modifierGroups":[]
+                  }]
+                }
+                """.formatted(EVENT_ID));
+
+        ArgumentCaptor<OutletMenuInitializedEvent> captor = ArgumentCaptor.forClass(OutletMenuInitializedEvent.class);
+        verify(outletInitializedHandler).handle(captor.capture());
+        verify(handler, never()).handle(any());
+
+        OutletMenuInitializedEvent event = captor.getValue();
+        assertEquals(501L, event.getOutletId());
+        assertEquals(3L, event.getOutletVersion());
+        assertEquals(8L, event.getMenuItems().getFirst().menuItemVersion());
+        assertEquals("Burger", event.getMenuItems().getFirst().itemName());
+    }
+
+    @Test
+    void invalidOutletInitializationPayload_recordsFailureAndDoesNotDelegate() {
+        String payload = """
+                {
+                  "eventId":"%s",
+                  "eventType":"OUTLET_MENU_INITIALIZED",
+                  "restaurantChainId":20,
+                  "menuGroupId":30,
+                  "outletVersion":3,
+                  "outletTimezone":"UTC",
+                  "occurredAt":"2026-01-05T10:00:00Z",
+                  "menuItems":[]
+                }
+                """.formatted(EVENT_ID);
+
+        assertThrows(IllegalArgumentException.class, () -> consumer.consume(payload));
+
+        verify(outletInitializedHandler, never()).handle(any());
+        verify(metrics).recordFailure();
+    }
+
+    @Test
+    void modifierPayload_isMappedAndDelegated() {
+        consumer.consume("""
+                {
+                  "eventId":"%s",
+                  "eventType":"MODIFIER_CONFIGURATION_CHANGED",
+                  "itemId":101,
+                  "restaurantChainId":20,
+                  "outletId":501,
+                  "aggregateVersion":5,
+                  "status":"ACTIVE",
+                  "modifierConfigurationChanged":true,
+                  "modifierGroups":[{
+                    "groupId":5,
+                    "groupName":"Choose Extras",
+                    "minimumSelections":0,
+                    "maximumSelections":1,
+                    "displayOrder":0,
+                    "options":[{
+                      "optionId":11,
+                      "optionName":"Cheese",
+                      "priceDelta":20.00,
+                      "displayOrder":0
+                    }]
+                  }],
+                  "occurredAt":"2026-01-01T00:00:00Z",
+                  "correlationId":"modifier-test"
+                }
+                """.formatted(EVENT_ID));
+
+        ArgumentCaptor<MenuItemChangedEvent> captor = ArgumentCaptor.forClass(MenuItemChangedEvent.class);
+        verify(handler).handle(captor.capture());
+        MenuItemChangedEvent event = captor.getValue();
+        assertEquals(Boolean.TRUE, event.getModifierConfigurationChanged());
+        assertEquals("Choose Extras", event.getModifierGroups().getFirst().groupName());
+        assertEquals("Cheese", event.getModifierGroups().getFirst().options().getFirst().optionName());
+    }
+
+    @Test
+    void modifierPayloadWithoutAGroupList_isRejectedBeforeDelegation() {
+        String payload = """
+                {
+                  "eventId":"%s",
+                  "eventType":"MODIFIER_CONFIGURATION_CHANGED",
+                  "itemId":101,
+                  "restaurantChainId":20,
+                  "outletId":501,
+                  "aggregateVersion":5,
+                  "status":"ACTIVE",
+                  "modifierConfigurationChanged":true,
+                  "occurredAt":"2026-01-01T00:00:00Z"
+                }
+                """.formatted(EVENT_ID);
+
+        assertThrows(IllegalArgumentException.class, () -> consumer.consume(payload));
+        verify(handler, never()).handle(any());
+        verify(metrics).recordFailure();
+    }
+
+    @Test
+    void bundlePayload_isMappedAndDelegated() {
+        consumer.consume("""
+                {
+                  "eventId":"%s",
+                  "eventType":"BUNDLE_CONFIGURATION_CHANGED",
+                  "itemId":101,
+                  "restaurantChainId":20,
+                  "outletId":501,
+                  "aggregateVersion":5,
+                  "status":"ACTIVE",
+                  "bundleConfigurationChanged":true,
+                  "bundleSnapshot":{
+                    "menuItemId":101,
+                    "name":"Burger Meal",
+                    "price":299.00,
+                    "children":[{
+                      "menuItemId":102,
+                      "name":"Fries",
+                      "kind":"PRODUCT",
+                      "quantity":1,
+                      "displayOrder":0,
+                      "status":"ACTIVE",
+                      "visibility":true,
+                      "availability":true,
+                      "children":[]
+                    }]
+                  },
+                  "occurredAt":"2026-01-01T00:00:00Z",
+                  "correlationId":"bundle-test"
+                }
+                """.formatted(EVENT_ID));
+
+        ArgumentCaptor<MenuItemChangedEvent> captor = ArgumentCaptor.forClass(MenuItemChangedEvent.class);
+        verify(handler).handle(captor.capture());
+        MenuItemChangedEvent event = captor.getValue();
+        assertEquals(Boolean.TRUE, event.getBundleConfigurationChanged());
+        assertEquals("Burger Meal", event.getBundleSnapshot().name());
+        assertEquals("Fries", event.getBundleSnapshot().children().getFirst().name());
+    }
+
+    @Test
+    void bundlePayloadWithoutASnapshot_isRejectedBeforeDelegation() {
+        String payload = """
+                {
+                  "eventId":"%s",
+                  "eventType":"BUNDLE_CONFIGURATION_CHANGED",
+                  "itemId":101,
+                  "restaurantChainId":20,
+                  "outletId":501,
+                  "aggregateVersion":5,
+                  "status":"ACTIVE",
+                  "bundleConfigurationChanged":true,
+                  "occurredAt":"2026-01-01T00:00:00Z"
+                }
+                """.formatted(EVENT_ID);
+
+        assertThrows(IllegalArgumentException.class, () -> consumer.consume(payload));
+        verify(handler, never()).handle(any());
+        verify(metrics).recordFailure();
     }
 
     @Test

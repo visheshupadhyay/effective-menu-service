@@ -129,6 +129,92 @@ public class MenuItemChangedEventApiEndToEndIntegrationTest {
     }
 
     @Test
+    void publishedActivation_createsUnknownItemAndReturnsItFromCustomerApi() throws Exception {
+        snapshotRepository.save(new EffectiveMenuSnapshotEntity(
+                OUTLET_ID, 4L, emptyMenu(), TIME, TIME));
+
+        String eventId = UUID.randomUUID().toString();
+        kafkaTemplate.send(SOURCE_TOPIC, String.valueOf(ITEM_ID), activationPayload(eventId, 5L)).join();
+        kafkaTemplate.flush();
+
+        waitForSnapshotVersion(5L);
+
+        mockMvc.perform(get("/api/v1/outlets/{outletId}/menu", OUTLET_ID))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.snapshotVersion").value(5))
+                .andExpect(jsonPath("$.effectiveMenu.items[0].id").value(ITEM_ID))
+                .andExpect(jsonPath("$.effectiveMenu.items[0].name").value("Activated Burger"))
+                .andExpect(jsonPath("$.effectiveMenu.items[0].price").value(149.0))
+                .andExpect(jsonPath("$.effectiveMenu.items[0].availability").value(true))
+                .andExpect(jsonPath("$.effectiveMenu.items[0].visibility").value(true))
+                .andExpect(jsonPath("$.effectiveMenu.items[0].status").value("ACTIVE"));
+    }
+
+    @Test
+    void publishedOutletInitialization_createsFirstSnapshotAndReturnsCompleteCustomerMenu() throws Exception {
+        // Unlike ordinary item events, onboarding starts with no row at all.
+        // The initialization handler must create Outlet 501's first snapshot.
+        String eventId = UUID.randomUUID().toString();
+        String payload = """
+                {
+                  "eventId": "%s",
+                  "eventType": "OUTLET_MENU_INITIALIZED",
+                  "outletId": %d,
+                  "restaurantChainId": 20,
+                  "menuGroupId": 30,
+                  "outletVersion": 3,
+                  "outletTimezone": "UTC",
+                  "occurredAt": "%s",
+                  "correlationId": "outlet-onboarding-e2e-test",
+                  "menuItems": [
+                    {
+                      "menuItemId": 101,
+                      "menuItemVersion": 8,
+                      "itemName": "Onboarding Burger",
+                      "price": 149.00,
+                      "status": "ACTIVE",
+                      "availability": true,
+                      "visibility": true,
+                      "baseScheduleWindows": {},
+                      "outletScheduleWindows": {},
+                      "modifierGroups": []
+                    },
+                    {
+                      "menuItemId": 102,
+                      "menuItemVersion": 2,
+                      "itemName": "Onboarding Fries",
+                      "price": 79.00,
+                      "status": "ACTIVE",
+                      "availability": true,
+                      "visibility": true,
+                      "baseScheduleWindows": {},
+                      "outletScheduleWindows": {},
+                      "modifierGroups": []
+                    }
+                  ]
+                }
+                """.formatted(eventId, OUTLET_ID, Instant.now());
+
+        // Catalog keys this event by outlet ID. Later Outlet 501 changes use
+        // the same key, so Kafka preserves their partition order.
+        kafkaTemplate.send(SOURCE_TOPIC, String.valueOf(OUTLET_ID), payload).join();
+        kafkaTemplate.flush();
+
+        waitForSnapshotVersion(3L);
+
+        mockMvc.perform(get("/api/v1/outlets/{outletId}/menu", OUTLET_ID))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.outletId").value(OUTLET_ID))
+                .andExpect(jsonPath("$.snapshotVersion").value(3))
+                .andExpect(jsonPath("$.effectiveMenu.items.length()").value(2))
+                .andExpect(jsonPath("$.effectiveMenu.items[0].id").value(101))
+                .andExpect(jsonPath("$.effectiveMenu.items[0].name").value("Onboarding Burger"))
+                .andExpect(jsonPath("$.effectiveMenu.items[0].price").value(149.0))
+                .andExpect(jsonPath("$.effectiveMenu.items[1].id").value(102))
+                .andExpect(jsonPath("$.effectiveMenu.items[1].name").value("Onboarding Fries"));
+    }
+
+    @Test
     void staleEvent_doesNotOverwriteNewerSnapshotOrApiResponse() throws Exception {
         snapshotRepository.save(new EffectiveMenuSnapshotEntity(
                 OUTLET_ID, 5L, menu(new BigDecimal("12.00"), false), TIME, TIME));
@@ -296,6 +382,144 @@ public class MenuItemChangedEventApiEndToEndIntegrationTest {
                 .andExpect(jsonPath("$.effectiveMenu.items[0].visibility").value(true));
     }
 
+    @Test
+    void modifierChange_isPersistedAndReturnedByCustomerApi() throws Exception {
+        snapshotRepository.save(new EffectiveMenuSnapshotEntity(
+                OUTLET_ID, 4L, menu(), TIME, TIME));
+
+        String eventId = UUID.randomUUID().toString();
+        kafkaTemplate.send(SOURCE_TOPIC, String.valueOf(ITEM_ID), modifierPayload(eventId, 5L, """
+                [{
+                  "groupId": 5,
+                  "groupName": "Choose Extras",
+                  "minimumSelections": 0,
+                  "maximumSelections": 1,
+                  "displayOrder": 0,
+                  "options": [{
+                    "optionId": 11,
+                    "optionName": "Cheese",
+                    "priceDelta": 20.00,
+                    "displayOrder": 0
+                  }]
+                }]
+                """)).join();
+        kafkaTemplate.flush();
+
+        waitForSnapshotVersion(5L);
+
+        mockMvc.perform(get("/api/v1/outlets/{outletId}/menu", OUTLET_ID))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.effectiveMenu.items[0].modifierGroups[0].groupId").value(5))
+                .andExpect(jsonPath("$.effectiveMenu.items[0].modifierGroups[0].groupName")
+                        .value("Choose Extras"))
+                .andExpect(jsonPath("$.effectiveMenu.items[0].modifierGroups[0].options[0].optionName")
+                        .value("Cheese"))
+                .andExpect(jsonPath("$.effectiveMenu.items[0].modifierGroups[0].options[0].priceDelta")
+                        .value(20.0));
+    }
+
+    @Test
+    void emptyModifierChange_removesCustomerPropertyUsingOptionB() throws Exception {
+        ObjectNode initialMenu = menu();
+        ObjectNode item = (ObjectNode) initialMenu.get("items").get(0);
+        item.putArray("modifierGroups").addObject().put("groupId", 5L);
+        snapshotRepository.save(new EffectiveMenuSnapshotEntity(
+                OUTLET_ID, 4L, initialMenu, TIME, TIME));
+
+        String eventId = UUID.randomUUID().toString();
+        kafkaTemplate.send(SOURCE_TOPIC, String.valueOf(ITEM_ID), modifierPayload(eventId, 5L, "[]")).join();
+        kafkaTemplate.flush();
+
+        waitForSnapshotVersion(5L);
+
+        mockMvc.perform(get("/api/v1/outlets/{outletId}/menu", OUTLET_ID))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.effectiveMenu.items[0].modifierGroups").doesNotExist());
+    }
+
+    @Test
+    void bundleChange_isPersistedAndReturnedByCustomerApi() throws Exception {
+        snapshotRepository.save(new EffectiveMenuSnapshotEntity(
+                OUTLET_ID, 4L, menu(), TIME, TIME));
+
+        String eventId = UUID.randomUUID().toString();
+        kafkaTemplate.send(SOURCE_TOPIC, String.valueOf(ITEM_ID), bundlePayload(eventId, 5L, true, true, "ACTIVE"))
+                .join();
+        kafkaTemplate.flush();
+
+        waitForSnapshotVersion(5L);
+
+        mockMvc.perform(get("/api/v1/outlets/{outletId}/menu", OUTLET_ID))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.effectiveMenu.items[0].name").value("Burger Meal"))
+                .andExpect(jsonPath("$.effectiveMenu.items[0].price").value(299.0))
+                .andExpect(jsonPath("$.effectiveMenu.items[0].bundleChildren[0].id").value(102))
+                .andExpect(jsonPath("$.effectiveMenu.items[0].bundleChildren[0].name").value("Fries"))
+                .andExpect(jsonPath("$.effectiveMenu.items[0].bundleChildren[0].quantity").value(1))
+                .andExpect(jsonPath("$.effectiveMenu.items[0].bundleChildren[0]._bundleEligibility").doesNotExist());
+    }
+
+    @Test
+    void newBundleRoot_isMaterializedEvenWhenAnotherItemHasAHigherSnapshotVersion() throws Exception {
+        ObjectNode existingMenu = menu();
+        ((ObjectNode) existingMenu.get("items").get(0)).put("id", 999L);
+        ((ObjectNode) existingMenu.get("items").get(0)).put("name", "Existing Burger");
+        snapshotRepository.save(new EffectiveMenuSnapshotEntity(
+                OUTLET_ID, 4L, existingMenu, TIME, TIME));
+
+        String eventId = UUID.randomUUID().toString();
+        kafkaTemplate.send(SOURCE_TOPIC, String.valueOf(ITEM_ID), bundlePayload(eventId, 1L, true, true, "ACTIVE"))
+                .join();
+        kafkaTemplate.flush();
+
+        // The outlet snapshot stays at its maximum observed version (4), but
+        // the new bundle has its own Catalog version (1) and must still appear.
+        waitForProcessedEvent(UUID.fromString(eventId));
+
+        mockMvc.perform(get("/api/v1/outlets/{outletId}/menu", OUTLET_ID))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.snapshotVersion").value(4))
+                .andExpect(jsonPath("$.effectiveMenu.items[1].id").value(ITEM_ID))
+                .andExpect(jsonPath("$.effectiveMenu.items[1].name").value("Burger Meal"))
+                .andExpect(jsonPath("$.effectiveMenu.items[1].bundleChildren[0].name").value("Fries"))
+                .andExpect(jsonPath("$.effectiveMenu.items[1]._catalogVersion").doesNotExist());
+    }
+
+    @Test
+    void bundleWithUnavailableRequiredChild_remainsVisibleButUnavailable() throws Exception {
+        snapshotRepository.save(new EffectiveMenuSnapshotEntity(
+                OUTLET_ID, 4L, menu(), TIME, TIME));
+
+        String eventId = UUID.randomUUID().toString();
+        kafkaTemplate.send(SOURCE_TOPIC, String.valueOf(ITEM_ID), bundlePayload(eventId, 5L, true, false, "ACTIVE"))
+                .join();
+        kafkaTemplate.flush();
+
+        waitForSnapshotVersion(5L);
+
+        mockMvc.perform(get("/api/v1/outlets/{outletId}/menu", OUTLET_ID))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.effectiveMenu.items[0].visibility").value(true))
+                .andExpect(jsonPath("$.effectiveMenu.items[0].availability").value(false));
+    }
+
+    @Test
+    void bundleWithHiddenRequiredChild_isRemovedFromCustomerApi() throws Exception {
+        snapshotRepository.save(new EffectiveMenuSnapshotEntity(
+                OUTLET_ID, 4L, menu(), TIME, TIME));
+
+        String eventId = UUID.randomUUID().toString();
+        kafkaTemplate.send(SOURCE_TOPIC, String.valueOf(ITEM_ID), bundlePayload(eventId, 5L, false, true, "HIDDEN"))
+                .join();
+        kafkaTemplate.flush();
+
+        waitForSnapshotVersion(5L);
+
+        mockMvc.perform(get("/api/v1/outlets/{outletId}/menu", OUTLET_ID))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.effectiveMenu.items").isEmpty());
+    }
+
     private String schedulePayload(String eventId, long version, String weekday,
             LocalTime startTime, LocalTime endTime) {
         return """
@@ -324,6 +548,79 @@ public class MenuItemChangedEventApiEndToEndIntegrationTest {
                         weekday, startTime, endTime, Instant.now());
     }
 
+    private String activationPayload(String eventId, long version) {
+        return """
+                {
+                  "eventId": "%s",
+                  "eventType": "MENU_ITEM_ACTIVATED",
+                  "itemId": %d,
+                  "restaurantChainId": 20,
+                  "outletId": %d,
+                  "aggregateVersion": %d,
+                  "itemName": "Activated Burger",
+                  "price": 149.00,
+                  "availability": true,
+                  "visibility": true,
+                  "status": "ACTIVE",
+                  "occurredAt": "%s",
+                  "correlationId": "activation-e2e-test"
+                }
+                """.formatted(eventId, ITEM_ID, OUTLET_ID, version, Instant.now());
+    }
+
+    private String modifierPayload(String eventId, long version, String modifierGroupsJson) {
+        return """
+                {
+                  "eventId": "%s",
+                  "eventType": "MODIFIER_CONFIGURATION_CHANGED",
+                  "itemId": %d,
+                  "restaurantChainId": 20,
+                  "outletId": %d,
+                  "aggregateVersion": %d,
+                  "status": "ACTIVE",
+                  "modifierConfigurationChanged": true,
+                  "modifierGroups": %s,
+                  "occurredAt": "%s",
+                  "correlationId": "modifier-e2e-test"
+                }
+                """.formatted(eventId, ITEM_ID, OUTLET_ID, version, modifierGroupsJson, Instant.now());
+    }
+
+    private String bundlePayload(String eventId, long version, boolean childVisibility,
+            boolean childAvailability, String childStatus) {
+        return """
+                {
+                  "eventId": "%s",
+                  "eventType": "BUNDLE_CONFIGURATION_CHANGED",
+                  "itemId": %d,
+                  "restaurantChainId": 20,
+                  "outletId": %d,
+                  "aggregateVersion": %d,
+                  "status": "ACTIVE",
+                  "bundleConfigurationChanged": true,
+                  "bundleSnapshot": {
+                    "menuItemId": %d,
+                    "name": "Burger Meal",
+                    "price": 299.00,
+                    "children": [{
+                      "menuItemId": 102,
+                      "name": "Fries",
+                      "kind": "PRODUCT",
+                      "quantity": 1,
+                      "displayOrder": 0,
+                      "status": "%s",
+                      "visibility": %s,
+                      "availability": %s,
+                      "children": []
+                    }]
+                  },
+                  "occurredAt": "%s",
+                  "correlationId": "bundle-e2e-test"
+                }
+                """.formatted(eventId, ITEM_ID, OUTLET_ID, version, ITEM_ID, childStatus,
+                        childVisibility, childAvailability, Instant.now());
+    }
+
     private void waitForSnapshotVersion(long expectedVersion) throws InterruptedException {
         long deadline = System.nanoTime() + Duration.ofSeconds(15).toNanos();
         while (System.nanoTime() < deadline) {
@@ -349,6 +646,13 @@ public class MenuItemChangedEventApiEndToEndIntegrationTest {
 
     private ObjectNode menu() {
         return menu(new BigDecimal("10.00"), true);
+    }
+
+    private ObjectNode emptyMenu() {
+        ObjectMapper mapper = new ObjectMapper();
+        ObjectNode menu = mapper.createObjectNode();
+        menu.set("items", mapper.createArrayNode());
+        return menu;
     }
 
     private ObjectNode menu(BigDecimal price, boolean availability) {

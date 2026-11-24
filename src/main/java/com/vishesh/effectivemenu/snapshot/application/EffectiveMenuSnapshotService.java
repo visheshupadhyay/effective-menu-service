@@ -8,6 +8,8 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.HashSet;
+import java.util.Set;
 import java.time.Duration;
 
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -148,9 +150,7 @@ public class EffectiveMenuSnapshotService {
 
     }
 
-    /**
-     * Returns a customer-safe copy without hidden, unavailable, or archived items.
-     */
+    /** Returns a customer-safe copy, including a resolved bundle tree when present. */
     public EffectiveMenuSnapshot getCustomerSnapshot(Long outletId) {
         EffectiveMenuSnapshot snapshot = getSnapshot(outletId);
         JsonNode menuCopy = snapshot.getEffectiveMenu().deepCopy();
@@ -161,14 +161,27 @@ public class EffectiveMenuSnapshotService {
         }
 
         ArrayNode items = (ArrayNode) menuCopy.get("items");
+        Map<Long, ObjectNode> currentItems = new LinkedHashMap<>();
+        // First evaluate time-based rules for every top-level item. Bundle
+        // eligibility can then use a child's current availability, not an old
+        // value saved when the Kafka event arrived.
+        for (JsonNode node : items) {
+            if (node instanceof ObjectNode item) {
+                applyCurrentSchedule(item);
+                applyCurrentSeasonalAvailability(item);
+                currentItems.put(item.path("id").asLong(), item);
+            }
+        }
+
         for (int index = items.size() - 1; index >= 0; index--) {
             JsonNode node = items.get(index);
             if (!(node instanceof ObjectNode item)) {
                 items.remove(index);
                 continue;
             }
-            applyCurrentSchedule(item);
-            applyCurrentSeasonalAvailability(item);
+
+            applyBundleEligibility(item, currentItems, new HashSet<>());
+            removeInternalBundleFields(item);
             if (!isCustomerVisible(item)) {
                 items.remove(index);
             }
@@ -183,6 +196,88 @@ public class EffectiveMenuSnapshotService {
         // hiding.
         return item.path("visibility").asBoolean(true)
                 && !"ARCHIVED".equals(item.path("status").asString());
+    }
+
+    /**
+     * A required hidden child hides its parent bundle. A required unavailable
+     * child leaves the bundle visible but makes it sold out. The map lets a
+     * child use its current top-level schedule/seasonal state when available.
+     */
+    private BundleEligibility applyBundleEligibility(ObjectNode item,
+            Map<Long, ObjectNode> currentItems, Set<Long> ancestorIds) {
+        JsonNode childrenNode = item.get("bundleChildren");
+        if (!(childrenNode instanceof ArrayNode children)) {
+            return BundleEligibility.eligible();
+        }
+
+        long itemId = item.path("id").asLong();
+        if (!ancestorIds.add(itemId)) {
+            // A Catalog event should already reject cycles. Treat malformed
+            // stored JSON conservatively so it cannot expose an unsafe meal.
+            return BundleEligibility.hiddenAndUnavailable();
+        }
+
+        boolean childrenVisible = true;
+        boolean childrenAvailable = true;
+        for (JsonNode node : children) {
+            if (!(node instanceof ObjectNode child)) {
+                childrenVisible = false;
+                childrenAvailable = false;
+                continue;
+            }
+            BundleEligibility childState = applyBundleChildEligibility(child, currentItems, ancestorIds);
+            childrenVisible &= childState.visible();
+            childrenAvailable &= childState.available();
+        }
+        ancestorIds.remove(itemId);
+
+        boolean ownAvailability = item.path("availability").asBoolean(true);
+        boolean ownVisibility = item.path("_bundleOwnVisibility").asBoolean(item.path("visibility").asBoolean(true));
+        item.put("availability", ownAvailability && childrenAvailable);
+        item.put("visibility", ownVisibility && childrenVisible);
+        return new BundleEligibility(ownVisibility && childrenVisible, ownAvailability && childrenAvailable);
+    }
+
+    private BundleEligibility applyBundleChildEligibility(ObjectNode child,
+            Map<Long, ObjectNode> currentItems, Set<Long> ancestorIds) {
+        JsonNode metadataNode = child.get("_bundleEligibility");
+        boolean visible = true;
+        boolean available = true;
+        if (metadataNode instanceof ObjectNode metadata) {
+            String status = metadata.path("status").asString();
+            visible = metadata.path("visibility").asBoolean(true)
+                    && !"ARCHIVED".equals(status)
+                    && !"HIDDEN".equals(status)
+                    && !"DRAFT".equals(status);
+            available = metadata.path("availability").asBoolean(true);
+        }
+
+        ObjectNode currentChild = currentItems.get(child.path("id").asLong());
+        if (currentChild != null) {
+            visible &= isCustomerVisible(currentChild);
+            available &= currentChild.path("availability").asBoolean(true);
+        }
+
+        BundleEligibility nested = applyBundleEligibility(child, currentItems, ancestorIds);
+        visible &= nested.visible();
+        available &= nested.available();
+        return new BundleEligibility(visible, available);
+    }
+
+    private void removeInternalBundleFields(ObjectNode item) {
+        item.remove("_catalogVersion");
+        item.remove("_bundleOwnAvailability");
+        item.remove("_bundleOwnVisibility");
+        JsonNode childrenNode = item.get("bundleChildren");
+        if (!(childrenNode instanceof ArrayNode children)) {
+            return;
+        }
+        for (JsonNode node : children) {
+            if (node instanceof ObjectNode child) {
+                child.remove("_bundleEligibility");
+                removeInternalBundleFields(child);
+            }
+        }
     }
 
     /** Evaluates persisted schedule metadata at read time, even when Redis holds the snapshot. */
@@ -237,6 +332,16 @@ public class EffectiveMenuSnapshotService {
             item.put("availability", item.path("availability").asBoolean(true) && seasonActive);
         } catch (RuntimeException ignored) {
             // Preserve the durable availability if seasonal metadata is corrupted.
+        }
+    }
+
+    private record BundleEligibility(boolean visible, boolean available) {
+        private static BundleEligibility eligible() {
+            return new BundleEligibility(true, true);
+        }
+
+        private static BundleEligibility hiddenAndUnavailable() {
+            return new BundleEligibility(false, false);
         }
     }
 }

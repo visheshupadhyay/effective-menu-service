@@ -110,11 +110,86 @@ class MenuItemChangedEventTest {
         assertEquals(List.of(outletWindow), event.getOutletScheduleWindows().get("MONDAY"));
     }
 
+    @Test
+    void modifierConfigurationEvent_acceptsACompleteGroupSnapshot() {
+        EventModifierOption cheese = new EventModifierOption(11L, "Cheese", new BigDecimal("20.00"), 0);
+        EventModifierGroup extras = new EventModifierGroup(5L, "Choose Extras", 0, 1, 0, List.of(cheese));
+
+        MenuItemChangedEvent event = modifierEvent(List.of(extras));
+
+        assertEquals(CatalogEventType.MODIFIER_CONFIGURATION_CHANGED, event.getEventType());
+        assertEquals(Boolean.TRUE, event.getModifierConfigurationChanged());
+        assertEquals(List.of(extras), event.getModifierGroups());
+    }
+
+    @Test
+    void modifierConfigurationEvent_acceptsAnEmptySnapshotToRemoveAllGroups() {
+        MenuItemChangedEvent event = modifierEvent(List.of());
+
+        assertEquals(Boolean.TRUE, event.getModifierConfigurationChanged());
+        assertEquals(List.of(), event.getModifierGroups());
+    }
+
+    @Test
+    void modifierConfigurationEvent_rejectsMissingGroupSnapshot() {
+        assertThrows(IllegalArgumentException.class, () -> new MenuItemChangedEvent(
+                EVENT_ID, null, CatalogEventType.MODIFIER_CONFIGURATION_CHANGED,
+                101L, 20L, 501L, 5L, null, null, null, null, OCCURRED_AT, "corr-1", MenuItemStatus.ACTIVE,
+                false, null, null, Map.of(), Map.of(), Map.of(), false, null, null, null, null, true, null));
+    }
+
+    @Test
+    void oldPriceEvent_keepsModifierFieldsAtTheirSafeDefaults() {
+        MenuItemChangedEvent event = event(null, new BigDecimal("12.00"), null, null);
+
+        assertEquals(Boolean.FALSE, event.getModifierConfigurationChanged());
+        assertEquals(List.of(), event.getModifierGroups());
+    }
+
+    @Test
+    void bundleConfigurationEvent_acceptsACompleteReplacementSnapshot() {
+        EventBundleSnapshot bundle = bundleSnapshot();
+
+        MenuItemChangedEvent event = bundleEvent(bundle);
+
+        assertEquals(CatalogEventType.BUNDLE_CONFIGURATION_CHANGED, event.getEventType());
+        assertEquals(Boolean.TRUE, event.getBundleConfigurationChanged());
+        assertEquals(bundle, event.getBundleSnapshot());
+    }
+
+    @Test
+    void bundleConfigurationEvent_rejectsMissingSnapshot() {
+        assertThrows(IllegalArgumentException.class, () -> new MenuItemChangedEvent(
+                EVENT_ID, null, CatalogEventType.BUNDLE_CONFIGURATION_CHANGED,
+                101L, 20L, 501L, 5L, null, null, null, null, OCCURRED_AT, "corr-1", MenuItemStatus.ACTIVE,
+                false, null, null, Map.of(), Map.of(), Map.of(), false, null, null, null, null,
+                false, List.of(), true, null));
+    }
+
     private MenuItemChangedEvent event(UUID eventId, CatalogEventType eventType, Long itemId,
             Long chainId, Long outletId, Long version, String name, BigDecimal price,
             Boolean availability, Boolean visibility) {
         return new MenuItemChangedEvent(eventId, null, eventType, itemId, chainId, outletId,
                 version, name, price, availability, visibility, OCCURRED_AT, "corr-1", MenuItemStatus.ACTIVE);
+    }
+
+    private MenuItemChangedEvent modifierEvent(List<EventModifierGroup> groups) {
+        return new MenuItemChangedEvent(EVENT_ID, null, CatalogEventType.MODIFIER_CONFIGURATION_CHANGED,
+                101L, 20L, 501L, 5L, null, null, null, null, OCCURRED_AT, "corr-1", MenuItemStatus.ACTIVE,
+                false, null, null, Map.of(), Map.of(), Map.of(), false, null, null, null, null, true, groups);
+    }
+
+    private MenuItemChangedEvent bundleEvent(EventBundleSnapshot bundle) {
+        return new MenuItemChangedEvent(EVENT_ID, null, CatalogEventType.BUNDLE_CONFIGURATION_CHANGED,
+                101L, 20L, 501L, 5L, null, null, null, null, OCCURRED_AT, "corr-1", MenuItemStatus.ACTIVE,
+                false, null, null, Map.of(), Map.of(), Map.of(), false, null, null, null, null,
+                false, List.of(), true, bundle);
+    }
+
+    private EventBundleSnapshot bundleSnapshot() {
+        EventBundleChild fries = new EventBundleChild(102L, "Fries", MenuItemKind.PRODUCT,
+                1, 0, MenuItemStatus.ACTIVE, true, true, List.of());
+        return new EventBundleSnapshot(101L, "Burger Meal", new BigDecimal("299.00"), List.of(fries));
     }
 
     private MenuItemChangedEvent event(String name, BigDecimal price,

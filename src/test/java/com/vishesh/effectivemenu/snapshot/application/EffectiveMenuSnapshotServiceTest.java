@@ -203,6 +203,76 @@ class EffectiveMenuSnapshotServiceTest {
     }
 
     @Test
+    void getCustomerSnapshot_keepsBundleVisibleButUnavailableWhenARequiredChildIsSoldOut() throws Exception {
+        var menu = new ObjectMapper().readTree("""
+                {"items":[{
+                  "id":10,"name":"Burger Meal","visibility":true,"availability":true,"status":"ACTIVE",
+                  "_catalogVersion":7,"_bundleOwnVisibility":true,"_bundleOwnAvailability":true,
+                  "bundleChildren":[{
+                    "id":2,"name":"Fries","quantity":1,
+                    "_bundleEligibility":{"status":"ACTIVE","visibility":true,"availability":false}
+                  }]
+                }]}""");
+        EffectiveMenuSnapshot cached = new EffectiveMenuSnapshot(501L, 11L, menu,
+                Instant.parse("2026-01-01T00:00:00Z"), Instant.parse("2026-01-01T00:00:00Z"));
+        when(cache.get(501L)).thenReturn(Optional.of(cached));
+
+        EffectiveMenuSnapshot customerSnapshot = service.getCustomerSnapshot(501L);
+
+        JsonNode bundle = customerSnapshot.getEffectiveMenu().get("items").get(0);
+        assertEquals(false, bundle.get("availability").asBoolean());
+        assertEquals(true, bundle.get("visibility").asBoolean());
+        assertEquals("Fries", bundle.get("bundleChildren").get(0).get("name").asText());
+        assertTrue(bundle.get("bundleChildren").get(0).get("_bundleEligibility") == null);
+        assertTrue(bundle.get("_bundleOwnAvailability") == null);
+        assertTrue(bundle.get("_catalogVersion") == null);
+    }
+
+    @Test
+    void getCustomerSnapshot_removesBundleWhenARequiredChildIsHidden() throws Exception {
+        var menu = new ObjectMapper().readTree("""
+                {"items":[{
+                  "id":10,"name":"Burger Meal","visibility":true,"availability":true,"status":"ACTIVE",
+                  "bundleChildren":[{
+                    "id":2,"name":"Fries","quantity":1,
+                    "_bundleEligibility":{"status":"HIDDEN","visibility":false,"availability":true}
+                  }]
+                }]}""");
+        EffectiveMenuSnapshot cached = new EffectiveMenuSnapshot(501L, 12L, menu,
+                Instant.parse("2026-01-01T00:00:00Z"), Instant.parse("2026-01-01T00:00:00Z"));
+        when(cache.get(501L)).thenReturn(Optional.of(cached));
+
+        EffectiveMenuSnapshot customerSnapshot = service.getCustomerSnapshot(501L);
+
+        assertEquals(0, customerSnapshot.getEffectiveMenu().get("items").size());
+    }
+
+    @Test
+    void getCustomerSnapshot_usesAChildsCurrentScheduleWhenCalculatingBundleAvailability() throws Exception {
+        service = new EffectiveMenuSnapshotService(repository, cache, false,
+                Duration.ofSeconds(5), Duration.ZERO, Duration.ZERO,
+                new com.vishesh.effectivemenu.snapshot.schedule.WeeklyScheduleEvaluator(),
+                Clock.fixed(Instant.parse("2026-01-05T12:00:00Z"), ZoneOffset.UTC));
+        var menu = new ObjectMapper().readTree("""
+                {"items":[
+                  {"id":10,"name":"Burger Meal","visibility":true,"availability":true,"status":"ACTIVE",
+                   "bundleChildren":[{"id":2,"name":"Fries","quantity":1,
+                     "_bundleEligibility":{"status":"ACTIVE","visibility":true,"availability":true}}]},
+                  {"id":2,"name":"Fries","visibility":true,"availability":true,"status":"ACTIVE",
+                   "_schedule":{"timezone":"UTC","catalogAvailability":true,"windows":{
+                     "MONDAY":[{"startTime":"09:00","endTime":"11:00"}]}}}
+                ]}""");
+        EffectiveMenuSnapshot cached = new EffectiveMenuSnapshot(501L, 13L, menu,
+                Instant.parse("2026-01-01T00:00:00Z"), Instant.parse("2026-01-01T00:00:00Z"));
+        when(cache.get(501L)).thenReturn(Optional.of(cached));
+
+        EffectiveMenuSnapshot customerSnapshot = service.getCustomerSnapshot(501L);
+
+        assertEquals(false, customerSnapshot.getEffectiveMenu().get("items").get(0)
+                .get("availability").asBoolean());
+    }
+
+    @Test
     void getSnapshot_whenLockIsAcquired_rechecksCacheAndReleasesLock() {
         service = new EffectiveMenuSnapshotService(repository, cache, true,
                 Duration.ofSeconds(5), Duration.ZERO, Duration.ZERO);

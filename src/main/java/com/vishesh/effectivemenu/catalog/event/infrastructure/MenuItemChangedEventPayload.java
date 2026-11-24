@@ -8,6 +8,8 @@ import java.util.List;
 import java.util.Map;
 
 import com.vishesh.effectivemenu.catalog.event.CatalogEventType;
+import com.vishesh.effectivemenu.catalog.event.EventModifierGroup;
+import com.vishesh.effectivemenu.catalog.event.EventBundleSnapshot;
 import com.vishesh.effectivemenu.catalog.event.EventScheduleWindow;
 import com.vishesh.effectivemenu.catalog.event.MenuItemStatus;
 
@@ -40,6 +42,10 @@ public class MenuItemChangedEventPayload {
     private LocalDate seasonalStartDate;
     private LocalDate seasonalEndDate;
     private String seasonalTimezone;
+    private Boolean modifierConfigurationChanged;
+    private List<EventModifierGroup> modifierGroups;
+    private Boolean bundleConfigurationChanged;
+    private EventBundleSnapshot bundleSnapshot;
 
     public MenuItemChangedEventPayload() {
 
@@ -133,6 +139,10 @@ public class MenuItemChangedEventPayload {
     public void setSeasonalStartDate(LocalDate value) { this.seasonalStartDate = value; }
     public void setSeasonalEndDate(LocalDate value) { this.seasonalEndDate = value; }
     public void setSeasonalTimezone(String value) { this.seasonalTimezone = value; }
+    public void setModifierConfigurationChanged(Boolean value) { this.modifierConfigurationChanged = value; }
+    public void setModifierGroups(List<EventModifierGroup> value) { this.modifierGroups = value; }
+    public void setBundleConfigurationChanged(Boolean value) { this.bundleConfigurationChanged = value; }
+    public void setBundleSnapshot(EventBundleSnapshot value) { this.bundleSnapshot = value; }
 
     public UUID getEventId() {
         return eventId;
@@ -222,5 +232,9 @@ public class MenuItemChangedEventPayload {
     public LocalDate getSeasonalStartDate() { return seasonalStartDate; }
     public LocalDate getSeasonalEndDate() { return seasonalEndDate; }
     public String getSeasonalTimezone() { return seasonalTimezone; }
+    public Boolean getModifierConfigurationChanged() { return modifierConfigurationChanged; }
+    public List<EventModifierGroup> getModifierGroups() { return modifierGroups; }
+    public Boolean getBundleConfigurationChanged() { return bundleConfigurationChanged; }
+    public EventBundleSnapshot getBundleSnapshot() { return bundleSnapshot; }
 
 }
